@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// Dev / internal workbench — open access while Firebase Auth is not wired up.
+// Tighten these rules before any public deployment.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /projects/{projectId} {
+      allow read, write: if true;
+    }
+
+    match /techStackLookup/{docId} {
+      allow read, write: if true;
+    }
+
+    match /sectorLookup/{docId} {
+      allow read, write: if true;
+    }
+
+    match /harvestEmailExclusions/{docId} {
+      allow read, write: if true;
+    }
+
+    match /email_summaries/{docId} {
+      allow read, write: if true;
+    }
+
+    match /communication_summary_colors/{docId} {
+      allow read, write: if true;
+    }
+
+    match /project_history/{docId} {
+      allow read, write: if true;
+    }
+
+    match /boardSilos/{docId} {
+      allow read, write: if true;
+    }
+
+    match /boardSettings/{docId} {
+      allow read, write: if true;
+    }
+  }
+}
