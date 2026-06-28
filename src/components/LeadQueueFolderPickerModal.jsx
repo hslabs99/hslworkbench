@@ -6,6 +6,7 @@ import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
 export default function LeadQueueFolderPickerModal({
   open,
   selectedFolder,
+  excludeFolderIds,
   onSelect,
   onClose,
 }) {
@@ -19,6 +20,17 @@ export default function LeadQueueFolderPickerModal({
     if (!open) return
     setPick(selectedFolder)
   }, [open, selectedFolder])
+
+  useEffect(() => {
+    if (!open || loading || !folders.length) return
+    const excluded =
+      excludeFolderIds instanceof Set ? excludeFolderIds : new Set(excludeFolderIds || [])
+    const available = folders.filter((folder) => !excluded.has(folder.id))
+    setPick((prev) => {
+      if (prev?.id && !excluded.has(prev.id)) return prev
+      return available[0] ?? null
+    })
+  }, [open, loading, folders, excludeFolderIds])
 
   useEffect(() => {
     if (!open || !account) return
@@ -51,13 +63,11 @@ export default function LeadQueueFolderPickerModal({
 
   if (!open) return null
 
+  const excluded = excludeFolderIds instanceof Set ? excludeFolderIds : new Set(excludeFolderIds || [])
+  const availableFolders = folders.filter((folder) => !excluded.has(folder.id))
+
   function handleConfirm() {
     onSelect(pick)
-    onClose()
-  }
-
-  function handleClear() {
-    onSelect(null)
     onClose()
   }
 
@@ -71,12 +81,12 @@ export default function LeadQueueFolderPickerModal({
       >
         <div className="project-form">
           <h2 id="lead-queue-folder-picker-title" className="form-title">
-            Lead queue folder
+            Add lead queue folder
           </h2>
           <p className="muted mail-folder-picker-intro">
-            Choose the Outlook folder under <strong>{clientMailRootLabel()}</strong> that holds
-            inbound leads not yet assigned to a client project folder. Scanning this folder will
-            create one card per unique sender email.
+            Choose an Outlook folder under <strong>{clientMailRootLabel()}</strong> to include when
+            scanning for unassigned leads. You can add multiple folders — for example the queue root
+            and an Unassigned subfolder.
           </p>
 
           {!account && (
@@ -89,13 +99,17 @@ export default function LeadQueueFolderPickerModal({
 
           {loading && <p className="muted">Loading folders…</p>}
 
-          {!loading && account && folders.length === 0 && !error && (
-            <p className="muted">No folders found under {clientMailRootLabel()}.</p>
+          {!loading && account && availableFolders.length === 0 && !error && (
+            <p className="muted">
+              {folders.length === 0
+                ? `No folders found under ${clientMailRootLabel()}.`
+                : 'All available folders are already selected.'}
+            </p>
           )}
 
-          {!loading && folders.length > 0 && (
+          {!loading && availableFolders.length > 0 && (
             <ul className="mail-folder-picker-list" role="listbox" aria-label="Lead queue folders">
-              {folders.map((folder) => (
+              {availableFolders.map((folder) => (
                 <li key={folder.id}>
                   <button
                     type="button"
@@ -121,11 +135,6 @@ export default function LeadQueueFolderPickerModal({
           )}
 
           <div className="form-actions mail-folder-picker-actions">
-            {selectedFolder && (
-              <button type="button" className="btn-danger btn-small" onClick={handleClear}>
-                Clear folder
-              </button>
-            )}
             <button type="button" className="btn-secondary" onClick={onClose}>
               Cancel
             </button>
@@ -135,7 +144,7 @@ export default function LeadQueueFolderPickerModal({
               onClick={handleConfirm}
               disabled={!pick}
             >
-              Select folder
+              Add folder
             </button>
           </div>
         </div>

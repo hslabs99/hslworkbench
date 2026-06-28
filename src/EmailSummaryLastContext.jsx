@@ -1,9 +1,15 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
 import { db } from './firebase.js'
+import { coerceToDate } from './commSummaryFormat.js'
 import { isExcludedHarvestEmail } from './harvestExclusionsCleanup.js'
 
 const EmailSummaryLastContext = createContext(null)
+
+function normalizeMessageDateIso(raw) {
+  const d = coerceToDate(raw)
+  return d ? d.toISOString() : null
+}
 
 function buildLastByProject(docs, excludeEmails) {
   /** @type {Record<string, { inbound: { date: string, type: string, t: number } | null, outbound: ... }>} */
@@ -13,7 +19,7 @@ function buildLastByProject(docs, excludeEmails) {
     const data = snap.data()
     const projectId = data.projectId
     const direction = data.direction
-    const messageDate = data.messageDate
+    const messageDate = normalizeMessageDateIso(data.messageDate)
     if (!projectId || !messageDate) continue
     if (direction !== 'outbound' && isExcludedHarvestEmail(data.from, excludeEmails)) continue
 

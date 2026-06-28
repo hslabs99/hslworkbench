@@ -37,6 +37,35 @@ export function normalizeLeadQueueFolder(raw) {
   }
 }
 
+/** Deduped list of scan folders; migrates legacy single `leadQueueFolder`. */
+export function normalizeLeadQueueFolders(data = {}) {
+  const fromArray = Array.isArray(data.leadQueueFolders)
+    ? data.leadQueueFolders.map(normalizeLeadQueueFolder).filter(Boolean)
+    : []
+  const seen = new Set()
+  const deduped = fromArray.filter((folder) => {
+    if (seen.has(folder.id)) return false
+    seen.add(folder.id)
+    return true
+  })
+  if (deduped.length) return deduped
+
+  const legacy = normalizeLeadQueueFolder(data.leadQueueFolder)
+  return legacy ? [legacy] : []
+}
+
+export function hasLeadQueueFolders(folders) {
+  return normalizeLeadQueueFolders({ leadQueueFolders: folders }).length > 0
+}
+
+export function formatLeadQueueFoldersLabel(folders, { maxNames = 3 } = {}) {
+  const list = normalizeLeadQueueFolders({ leadQueueFolders: folders })
+  if (!list.length) return ''
+  const names = list.map((f) => f.displayName || f.path || 'folder')
+  if (names.length <= maxNames) return names.join(', ')
+  return `${names.slice(0, maxNames).join(', ')} +${names.length - maxNames} more`
+}
+
 export function normalizeScanDays(raw) {
   const n = Number(raw)
   if (!Number.isFinite(n)) return DEFAULT_UNASSIGNED_SCAN_DAYS
@@ -82,8 +111,11 @@ export function indexProjectsByProspectEmail(projects) {
 }
 
 export function normalizeUnassignedQueueSettings(data = {}) {
+  const leadQueueFolders = normalizeLeadQueueFolders(data)
   return {
-    leadQueueFolder: normalizeLeadQueueFolder(data.leadQueueFolder),
+    leadQueueFolders,
+    /** @deprecated use leadQueueFolders */
+    leadQueueFolder: leadQueueFolders[0] ?? null,
     scanDays: normalizeScanDays(data.scanDays),
     deepScan: data.deepScan !== false,
     forceRescan: Boolean(data.forceRescan),
@@ -124,19 +156,24 @@ async function writeUnassignedQueueSettings(patch) {
 
 export async function updateLeadQueueFolder(folder) {
   await writeUnassignedQueueSettings({
-    leadQueueFolder: normalizeLeadQueueFolder(folder),
+    leadQueueFolders: folder ? [normalizeLeadQueueFolder(folder)].filter(Boolean) : [],
   })
 }
 
 export async function updateUnassignedQueueSettings({
   leadQueueFolder,
+  leadQueueFolders,
   scanDays,
   deepScan,
   forceRescan,
 } = {}) {
   const patch = {}
-  if (leadQueueFolder !== undefined) {
-    patch.leadQueueFolder = normalizeLeadQueueFolder(leadQueueFolder)
+  if (leadQueueFolders !== undefined) {
+    patch.leadQueueFolders = normalizeLeadQueueFolders({ leadQueueFolders })
+  } else if (leadQueueFolder !== undefined) {
+    patch.leadQueueFolders = leadQueueFolder
+      ? [normalizeLeadQueueFolder(leadQueueFolder)].filter(Boolean)
+      : []
   }
   if (scanDays !== undefined) {
     patch.scanDays = normalizeScanDays(scanDays)

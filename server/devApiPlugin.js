@@ -3,6 +3,7 @@ import { getAiPromptConfig } from './aiPrompts.js'
 import { formatOpenAIError } from './openaiErrors.js'
 import { summariseAllEmails } from './openaiSummarise.js'
 import { suggestProspectProjectName } from './openaiProspectNaming.js'
+import { seedDevUsersOnce } from './seedUsers.js'
 import {
   analyzeSqlExportAsync,
   buildImportCommand,
@@ -53,6 +54,19 @@ export function devApiPlugin() {
     configureServer(server) {
       const env = loadEnv('', process.cwd(), '')
       Object.assign(process.env, env)
+
+      seedDevUsersOnce()
+        .then((result) => {
+          if (result.seeded) {
+            console.log(`[hsl-workbench] Seeded dev user "${result.username}"`)
+          }
+        })
+        .catch((err) => {
+          console.warn(
+            '[hsl-workbench] Dev user seed skipped:',
+            err instanceof Error ? err.message : String(err),
+          )
+        })
 
       server.middlewares.use(async (req, res, next) => {
         const path = req.url?.split('?')[0]

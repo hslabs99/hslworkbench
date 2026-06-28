@@ -23,6 +23,7 @@ export function useUnassignedQueue() {
   }, [])
 
   return {
+    leadQueueFolders: settings?.leadQueueFolders ?? [],
     leadQueueFolder: settings?.leadQueueFolder ?? null,
     scanDays: settings?.scanDays ?? 30,
     deepScan: settings?.deepScan !== false,

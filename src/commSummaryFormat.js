@@ -1,9 +1,26 @@
 /** Compact display helpers for Communication Summary table. */
 
+/** Parse ISO strings, Date, or Firestore Timestamp. */
+export function coerceToDate(value) {
+  if (value == null) return null
+  if (typeof value.toDate === 'function') {
+    try {
+      const d = value.toDate()
+      return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null
+    } catch {
+      return null
+    }
+  }
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value
+  }
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
 export function formatSummaryDate(iso) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
+  const d = coerceToDate(iso)
+  if (!d) return '—'
   const dd = String(d.getDate()).padStart(2, '0')
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const hh = String(d.getHours()).padStart(2, '0')
@@ -13,9 +30,8 @@ export function formatSummaryDate(iso) {
 
 /** dd/mm for project cards */
 export function formatCardDateOnly(iso) {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
+  const d = coerceToDate(iso)
+  if (!d) return '—'
   const dd = String(d.getDate()).padStart(2, '0')
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   return `${dd}/${mm}`
@@ -23,9 +39,8 @@ export function formatCardDateOnly(iso) {
 
 /** Whole days between message date and today (0 = today). */
 export function daysAgoFromIso(iso) {
-  if (!iso) return 0
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return 0
+  const d = coerceToDate(iso)
+  if (!d) return 0
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   const then = new Date(d)
@@ -35,18 +50,8 @@ export function daysAgoFromIso(iso) {
 
 /** Days since a Firestore timestamp or ISO date (for folder scan age on cards). */
 export function daysSinceTimestamp(ts) {
-  if (ts == null) return null
-  let d
-  if (typeof ts.toDate === 'function') {
-    try {
-      d = ts.toDate()
-    } catch {
-      return null
-    }
-  } else {
-    d = new Date(ts)
-  }
-  if (Number.isNaN(d.getTime())) return null
+  const d = coerceToDate(ts)
+  if (!d) return null
   return daysAgoFromIso(d.toISOString())
 }
 
@@ -64,18 +69,8 @@ export function formatMailScanTooltip(ts) {
 }
 
 export function formatHistoryTimestamp(ts) {
-  if (ts == null) return '—'
-  let d
-  if (typeof ts.toDate === 'function') {
-    try {
-      d = ts.toDate()
-    } catch {
-      return '—'
-    }
-  } else {
-    d = new Date(ts)
-  }
-  if (Number.isNaN(d.getTime())) return '—'
+  const d = coerceToDate(ts)
+  if (!d) return '—'
   const dd = String(d.getDate()).padStart(2, '0')
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const hh = String(d.getHours()).padStart(2, '0')

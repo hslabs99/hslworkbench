@@ -26,23 +26,26 @@ function throwIfCancelled(isCancelled) {
 }
 
 export async function discoverLeadQueueProspects(accessToken, {
+  leadQueueFolders = [],
   leadQueueFolderId,
   excludeEmails = [],
   userEmail = '',
   days = 30,
   deepScan = false,
 }) {
-  if (!leadQueueFolderId) throw new Error('Choose a lead queue folder in Column settings.')
+  const folders = leadQueueFolders.length
+    ? leadQueueFolders.filter((f) => f?.id)
+    : leadQueueFolderId
+      ? [{ id: leadQueueFolderId }]
+      : []
+  if (!folders.length) {
+    throw new Error('Choose at least one lead queue folder in Column settings.')
+  }
 
   const since = new Date()
   since.setDate(since.getDate() - Math.max(1, Number(days) || 30))
   since.setHours(0, 0, 0, 0)
   const sinceIso = since.toISOString()
-
-  const messages = await fetchMessagesSince(accessToken, leadQueueFolderId, sinceIso, {
-    dateField: 'receivedDateTime',
-    deepScan,
-  })
 
   const exclude = new Set(
     [
@@ -52,29 +55,42 @@ export async function discoverLeadQueueProspects(accessToken, {
   )
 
   const byEmail = new Map()
-  for (const msg of messages) {
-    const from = normalizeEmailAddress(senderAddressFromGraph(msg.from))
-    if (!from || exclude.has(from) || isExcludedHarvestEmail(from, excludeEmails)) continue
-    const name = (msg.from?.emailAddress?.name || '').trim()
-    const subject = (msg.subject || '').trim()
-    const leadBody = buildCommunicationSummaryText(msg)
-    const received = msg.receivedDateTime ? new Date(msg.receivedDateTime).getTime() : 0
 
-    if (!byEmail.has(from)) {
-      byEmail.set(from, {
-        email: from,
-        name,
-        leadSubject: subject,
-        leadBody,
-        leadDate: received,
-      })
-    } else {
-      const entry = byEmail.get(from)
-      if (name && !entry.name) entry.name = name
-      if (received >= (entry.leadDate || 0)) {
-        entry.leadSubject = subject
-        entry.leadBody = leadBody
-        entry.leadDate = received
+  for (const folder of folders) {
+    const messages = await fetchMessagesSince(accessToken, folder.id, sinceIso, {
+      dateField: 'receivedDateTime',
+      deepScan,
+    })
+
+    for (const msg of messages) {
+      const from = normalizeEmailAddress(senderAddressFromGraph(msg.from))
+      if (!from || exclude.has(from) || isExcludedHarvestEmail(from, excludeEmails)) continue
+      const name = (msg.from?.emailAddress?.name || '').trim()
+      const subject = (msg.subject || '').trim()
+      const leadBody = buildCommunicationSummaryText(msg)
+      const received = msg.receivedDateTime ? new Date(msg.receivedDateTime).getTime() : 0
+      const sourceFolder = folder.displayName
+        ? folder
+        : { id: folder.id, displayName: '', path: '' }
+
+      if (!byEmail.has(from)) {
+        byEmail.set(from, {
+          email: from,
+          name,
+          leadSubject: subject,
+          leadBody,
+          leadDate: received,
+          sourceFolder,
+        })
+      } else {
+        const entry = byEmail.get(from)
+        if (name && !entry.name) entry.name = name
+        if (received >= (entry.leadDate || 0)) {
+          entry.leadSubject = subject
+          entry.leadBody = leadBody
+          entry.leadDate = received
+          entry.sourceFolder = sourceFolder
+        }
       }
     }
   }
@@ -166,10 +182,11 @@ export async function ensureProspectProject(
 }
 
 /**
- * Scan lead queue folder + Sent Items per prospect card (one card per unique sender).
+ * Scan lead queue folder(s) + Sent Items per prospect card (one card per unique sender).
  */
 export async function runUnassignedQueueScan({
   accessToken,
+  leadQueueFolders = [],
   leadQueueFolder,
   existingProjects = [],
   excludeEmails = [],
@@ -183,8 +200,13 @@ export async function runUnassignedQueueScan({
   onProgress,
   isCancelled,
 }) {
-  if (!leadQueueFolder?.id) {
-    throw new Error('Choose a lead queue folder in Column settings.')
+  const folders = leadQueueFolders.length
+    ? leadQueueFolders.filter((f) => f?.id)
+    : leadQueueFolder?.id
+      ? [leadQueueFolder]
+      : []
+  if (!folders.length) {
+    throw new Error('Choose at least one lead queue folder in Column settings.')
   }
 
   const summary = {
@@ -211,7 +233,7 @@ export async function runUnassignedQueueScan({
   })
 
   const prospects = await discoverLeadQueueProspects(accessToken, {
-    leadQueueFolderId: leadQueueFolder.id,
+    leadQueueFolders: folders,
     excludeEmails,
     userEmail,
     days,
@@ -238,7 +260,8 @@ export async function runUnassignedQueueScan({
   for (let i = 0; i < prospects.length; i += 1) {
     throwIfCancelled(isCancelled)
     const prospect = prospects[i]
-    const result = await ensureProspectProject(prospect, leadQueueFolder, {
+    const prospectFolder = prospect.sourceFolder || folders[0]
+    const result = await ensureProspectProject(prospect, prospectFolder, {
       unassignedByEmail,
       assignedEmails,
       promptOverrides,

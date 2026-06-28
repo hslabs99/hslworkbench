@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import MailFolderPickerModal from './MailFolderPickerModal.jsx'
-import { projectClientMailFolder } from '../graphMail.js'
+import MainContactFieldMenu from './MainContactFieldMenu.jsx'
+import { useHarvestExclusions } from './HarvestExclusionsSection.jsx'
+import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
+import { harvestClientEmailsFromFolder, projectClientMailFolder } from '../graphMail.js'
 import { clientMailRootLabel } from '../mailFolderConfig.js'
 
 function buildEmpty() {
@@ -73,6 +76,11 @@ export default function ProjectForm({
   const [manualTechInput, setManualTechInput] = useState('')
   const [clientMailFolder, setClientMailFolder] = useState(null)
   const [folderPickerOpen, setFolderPickerOpen] = useState(false)
+  const [harvesting, setHarvesting] = useState(false)
+  const [harvestError, setHarvestError] = useState(null)
+  const [harvestMessage, setHarvestMessage] = useState(null)
+  const { configured, account, getAccessToken, userEmail } = useMicrosoftAuth()
+  const { excludeEmails: harvestExclusions } = useHarvestExclusions()
 
   useEffect(() => {
     if (mode === 'edit' && initialProject) {
@@ -87,6 +95,8 @@ export default function ProjectForm({
       setManualSectorInput('')
       setManualTechInput('')
       setClientMailFolder(null)
+      setHarvestError(null)
+      setHarvestMessage(null)
     }
   }, [mode, initialProject])
 
@@ -118,6 +128,83 @@ export default function ProjectForm({
       setClientMailFolder(projectClientMailFolder(initialProject))
     }
   }, [mode, initialProject])
+
+  async function applyHarvestResult(result, { fillPrimary = true, force = false } = {}) {
+    const parts = [`Scanned ${result.messagesScanned} message${result.messagesScanned === 1 ? '' : 's'}`]
+    if (result.primary?.email && fillPrimary) {
+      setValues((v) => ({
+        ...v,
+        mainContactEmail: force
+          ? result.primary.email
+          : v.mainContactEmail.trim() || result.primary.email,
+        mainContactName: force
+          ? result.primary.name || v.mainContactName
+          : v.mainContactName.trim() || result.primary.name || v.mainContactName,
+      }))
+      parts.push(`primary contact ${result.primary.email}`)
+    } else if (result.added.length > 0) {
+      parts.push(`found ${result.added.length} address${result.added.length === 1 ? '' : 'es'}`)
+    } else {
+      parts.push('no new addresses found')
+    }
+    setHarvestMessage(parts.join(' — '))
+  }
+
+  async function runHarvest(folder, { fillPrimary = true, force = false } = {}) {
+    if (!folder?.id) return
+    if (!configured || !account) {
+      setHarvestError('Connect Microsoft email in Settings before harvesting.')
+      return
+    }
+
+    setHarvesting(true)
+    setHarvestError(null)
+    setHarvestMessage(null)
+
+    try {
+      const token = await getAccessToken()
+      if (!token) throw new Error('Microsoft sign-in required.')
+
+      const existingContacts = [
+        {
+          name: values.mainContactName || '',
+          email: values.mainContactEmail || '',
+          role: '',
+          phone: '',
+        },
+      ]
+
+      const result = await harvestClientEmailsFromFolder(
+        token,
+        folder.id,
+        existingContacts,
+        { mailboxEmail: userEmail, globalExcludeEmails: harvestExclusions },
+      )
+
+      await applyHarvestResult(result, { fillPrimary, force })
+    } catch (err) {
+      setHarvestError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setHarvesting(false)
+    }
+  }
+
+  async function handleHarvestMainContact() {
+    if (!clientMailFolder?.id) {
+      setHarvestError('Choose a client mail folder first.')
+      setHarvestMessage(null)
+      return
+    }
+    await runHarvest(clientMailFolder, { fillPrimary: true, force: true })
+  }
+
+  async function handleFolderSelect(folder) {
+    setClientMailFolder(folder)
+    setFolderPickerOpen(false)
+    if (mode === 'add' && folder?.id) {
+      await runHarvest(folder, { fillPrimary: true })
+    }
+  }
 
   function handleChange(e) {
     const { name, value, type, checked } = e.target
@@ -352,23 +439,11 @@ export default function ProjectForm({
             onChange={handleChange}
           />
         </label>
-        <label>
-          Main contact name
-          <input name="mainContactName" value={values.mainContactName} onChange={handleChange} />
-        </label>
-        <label>
-          Main contact email
-          <input
-            type="email"
-            name="mainContactEmail"
-            value={values.mainContactEmail}
-            onChange={handleChange}
-          />
-        </label>
         <fieldset className="full-width mail-folder-fieldset">
           <legend>Client mail folder</legend>
           <p className="muted mail-folder-field-hint">
-            Subfolder under {clientMailRootLabel()} to scan for this client&apos;s email.
+            Subfolder under {clientMailRootLabel()} to scan for this client&apos;s email. Choosing a
+            folder harvests addresses from its mail and fills the main contact when creating a project.
           </p>
           <div className="mail-folder-field-row">
             <div className="mail-folder-field-display">
@@ -385,19 +460,78 @@ export default function ProjectForm({
               type="button"
               className="btn-secondary btn-small"
               onClick={() => setFolderPickerOpen(true)}
+              disabled={harvesting}
             >
               {clientMailFolder ? 'Change folder' : 'Choose folder'}
             </button>
             {clientMailFolder && (
-              <button
-                type="button"
-                className="btn-secondary btn-small"
-                onClick={() => setClientMailFolder(null)}
-              >
-                Clear
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={() => runHarvest(clientMailFolder)}
+                  disabled={harvesting || !account}
+                >
+                  {harvesting ? 'Harvesting…' : 'Harvest emails'}
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={() => {
+                    setClientMailFolder(null)
+                    setHarvestMessage(null)
+                    setHarvestError(null)
+                  }}
+                  disabled={harvesting}
+                >
+                  Clear
+                </button>
+              </>
             )}
           </div>
+          {!account && configured && (
+            <p className="muted mail-folder-field-hint">
+              Connect Microsoft email in Settings to harvest from a folder.
+            </p>
+          )}
+        </fieldset>
+        <fieldset className="full-width main-contact-fieldset">
+          <legend className="main-contact-legend">
+            <span>Main contact</span>
+            <MainContactFieldMenu
+              onHarvest={handleHarvestMainContact}
+              disabled={harvesting}
+              harvestDisabled={harvesting || !clientMailFolder?.id || !account}
+            />
+          </legend>
+          <div className="main-contact-fields">
+            <label>
+              Name
+              <input name="mainContactName" value={values.mainContactName} onChange={handleChange} />
+            </label>
+            <label>
+              Email
+              <input
+                type="email"
+                name="mainContactEmail"
+                value={values.mainContactEmail}
+                onChange={handleChange}
+              />
+            </label>
+          </div>
+          {!account && configured && (
+            <p className="muted main-contact-hint">
+              Connect Microsoft email in Settings to harvest from the client mail folder.
+            </p>
+          )}
+          {account && !clientMailFolder && (
+            <p className="muted main-contact-hint">
+              Assign a client mail folder above, then use Harvest to fill name and email from its
+              messages.
+            </p>
+          )}
+          {harvestError && <p className="form-error">{harvestError}</p>}
+          {harvestMessage && <p className="muted project-form-harvest-result">{harvestMessage}</p>}
         </fieldset>
         <label className="full-width">
           AI context
@@ -464,7 +598,7 @@ export default function ProjectForm({
         open={folderPickerOpen}
         projectName={values.projectName}
         selectedFolder={clientMailFolder}
-        onSelect={setClientMailFolder}
+        onSelect={handleFolderSelect}
         onClose={() => setFolderPickerOpen(false)}
       />
     </form>

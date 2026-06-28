@@ -5,13 +5,13 @@ import UnassignedColumnSettingsModal from './UnassignedColumnSettingsModal.jsx'
 import UnassignedQueueScanProgressModal, {
   UnassignedQueueScanConfirmModal,
 } from './UnassignedQueueScanModal.jsx'
-import { normalizeScanDays, UNASSIGNED_SILO, UNASSIGNED_SILO_ID } from '../unassignedQueue.js'
+import { normalizeScanDays, UNASSIGNED_SILO, UNASSIGNED_SILO_ID, hasLeadQueueFolders } from '../unassignedQueue.js'
 import { runUnassignedQueueScan } from '../unassignedQueueScan.js'
 
 export default function UnassignedColumn({
   projects,
   allProjects,
-  leadQueueFolder,
+  leadQueueFolders,
   scanDays,
   deepScan,
   forceRescan: forceRescanSetting,
@@ -135,8 +135,8 @@ export default function UnassignedColumn({
       window.alert('Connect Microsoft email in Settings before scanning.')
       return
     }
-    if (!leadQueueFolder?.id) {
-      window.alert('Choose a lead queue folder in Column settings first.')
+    if (!hasLeadQueueFolders(leadQueueFolders)) {
+      window.alert('Choose at least one lead queue folder in Column settings first.')
       return
     }
     setScanConfirmOpen(true)
@@ -160,7 +160,7 @@ export default function UnassignedColumn({
   }
 
   async function handleStartScan() {
-    if (!leadQueueFolder?.id) return
+    if (!hasLeadQueueFolders(leadQueueFolders)) return
 
     const days = normalizeScanDays(scanDaysLocal)
     const deep = scanDeepLocal
@@ -192,7 +192,7 @@ export default function UnassignedColumn({
 
       const summary = await runUnassignedQueueScan({
         accessToken: token,
-        leadQueueFolder,
+        leadQueueFolders,
         existingProjects: allProjects || [],
         excludeEmails: harvestExclusions || [],
         userEmail: userEmail || '',
@@ -243,9 +243,9 @@ export default function UnassignedColumn({
         >
           {projects.length === 0 && (
             <p className="silo-empty muted unassigned-column-empty">
-              {leadQueueFolder
+              {hasLeadQueueFolders(leadQueueFolders)
                 ? 'No lead cards yet — use Scan lead queue (⋯) to discover prospects.'
-                : 'Open Column settings (⋯) to choose a lead queue folder.'}
+                : 'Open Column settings (⋯) to choose lead queue folders.'}
             </p>
           )}
           {projects.map((p) => (
@@ -271,7 +271,7 @@ export default function UnassignedColumn({
 
       <UnassignedColumnSettingsModal
         open={settingsOpen}
-        leadQueueFolder={leadQueueFolder}
+        leadQueueFolders={leadQueueFolders}
         scanDays={scanDays}
         deepScan={deepScan}
         forceRescan={forceRescanSetting}
@@ -282,7 +282,7 @@ export default function UnassignedColumn({
 
       <UnassignedQueueScanConfirmModal
         open={scanConfirmOpen}
-        leadQueueFolder={leadQueueFolder}
+        leadQueueFolders={leadQueueFolders}
         days={scanDaysLocal}
         deepScan={scanDeepLocal}
         forceRescan={scanForceLocal}

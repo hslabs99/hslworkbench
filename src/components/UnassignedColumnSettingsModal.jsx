@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
 import { clientMailRootLabel } from '../mailFolderConfig.js'
-import { normalizeScanDays } from '../unassignedQueue.js'
+import { normalizeLeadQueueFolders, normalizeScanDays } from '../unassignedQueue.js'
 import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
 import LeadQueueFolderPickerModal from './LeadQueueFolderPickerModal.jsx'
 
 export default function UnassignedColumnSettingsModal({
   open,
-  leadQueueFolder,
+  leadQueueFolders,
   scanDays,
   deepScan,
   forceRescan,
@@ -15,7 +15,7 @@ export default function UnassignedColumnSettingsModal({
   busy,
 }) {
   const { configured, account } = useMicrosoftAuth()
-  const [folder, setFolder] = useState(leadQueueFolder)
+  const [folders, setFolders] = useState(leadQueueFolders)
   const [days, setDays] = useState(scanDays)
   const [deep, setDeep] = useState(deepScan)
   const [force, setForce] = useState(forceRescan)
@@ -24,22 +24,23 @@ export default function UnassignedColumnSettingsModal({
 
   useEffect(() => {
     if (!open) return
-    setFolder(leadQueueFolder)
+    setFolders(normalizeLeadQueueFolders({ leadQueueFolders }))
     setDays(scanDays)
     setDeep(deepScan)
     setForce(forceRescan)
     setError(null)
-  }, [open, leadQueueFolder, scanDays, deepScan, forceRescan])
+  }, [open, leadQueueFolders, scanDays, deepScan, forceRescan])
 
   if (!open) return null
 
   const canPickFolder = configured && account
+  const selectedFolderIds = new Set(folders.map((f) => f.id))
 
   async function handleSave() {
     setError(null)
     try {
       await onSave({
-        leadQueueFolder: folder,
+        leadQueueFolders: folders,
         scanDays: normalizeScanDays(days),
         deepScan: deep,
         forceRescan: force,
@@ -50,8 +51,13 @@ export default function UnassignedColumnSettingsModal({
     }
   }
 
-  function handleClearFolder() {
-    setFolder(null)
+  function handleAddFolder(folder) {
+    if (!folder?.id || selectedFolderIds.has(folder.id)) return
+    setFolders((prev) => [...prev, folder])
+  }
+
+  function handleRemoveFolder(folderId) {
+    setFolders((prev) => prev.filter((f) => f.id !== folderId))
   }
 
   return (
@@ -68,49 +74,53 @@ export default function UnassignedColumnSettingsModal({
               Unassigned column settings
             </h2>
             <p className="muted unassigned-settings-intro">
-              Lead queue folder and scan options for the system Unassigned list. One card will be
-              created per unique sender when scanning runs.
+              Choose one or more lead queue folders to scan for the system Unassigned list. One card
+              will be created per unique sender when scanning runs.
             </p>
 
             <fieldset className="unassigned-settings-fieldset">
-              <legend>Lead queue folder</legend>
+              <legend>Lead queue folders</legend>
               <p className="muted mail-folder-field-hint">
-                Subfolder under <strong>{clientMailRootLabel()}</strong> containing inbound leads
-                not yet assigned to a client project.
+                Folders under <strong>{clientMailRootLabel()}</strong> that may hold inbound leads
+                not yet assigned to a client project — for example the queue root and an Unassigned
+                subfolder.
               </p>
-              <div className="unassigned-settings-folder-row">
-                {folder ? (
-                  <div className="unassigned-settings-folder-display">
-                    <strong>{folder.displayName}</strong>
-                    <span className="muted">{folder.path}</span>
-                  </div>
-                ) : (
-                  <span className="muted">No folder selected</span>
-                )}
-                <div className="unassigned-settings-folder-actions">
-                  <button
-                    type="button"
-                    className="btn-secondary btn-small"
-                    onClick={() => setFolderPickerOpen(true)}
-                    disabled={!canPickFolder || busy}
-                  >
-                    {folder ? 'Change folder' : 'Choose folder'}
-                  </button>
-                  {folder && (
-                    <button
-                      type="button"
-                      className="btn-secondary btn-small"
-                      onClick={handleClearFolder}
-                      disabled={busy}
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
+              {folders.length > 0 ? (
+                <ul className="unassigned-settings-folder-list" aria-label="Selected scan folders">
+                  {folders.map((folder) => (
+                    <li key={folder.id} className="unassigned-settings-folder-item">
+                      <div className="unassigned-settings-folder-display">
+                        <strong>{folder.displayName}</strong>
+                        <span className="muted">{folder.path}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-small"
+                        onClick={() => handleRemoveFolder(folder.id)}
+                        disabled={busy}
+                        aria-label={`Remove ${folder.displayName}`}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="muted unassigned-settings-no-folders">No folders selected</p>
+              )}
+              <div className="unassigned-settings-folder-actions">
+                <button
+                  type="button"
+                  className="btn-secondary btn-small"
+                  onClick={() => setFolderPickerOpen(true)}
+                  disabled={!canPickFolder || busy}
+                >
+                  Add folder
+                </button>
               </div>
               {!canPickFolder && (
                 <p className="form-error unassigned-settings-connect-hint">
-                  Connect Microsoft email in Settings to choose a folder.
+                  Connect Microsoft email in Settings to choose folders.
                 </p>
               )}
             </fieldset>
@@ -138,7 +148,7 @@ export default function UnassignedColumnSettingsModal({
                   onChange={(e) => setDeep(e.target.checked)}
                   disabled={busy}
                 />
-                Deep scan (full day window, up to 2000 messages in folder)
+                Deep scan (full day window, up to 2000 messages per folder)
               </label>
               <label className="unassigned-settings-deep">
                 <input
@@ -167,8 +177,9 @@ export default function UnassignedColumnSettingsModal({
 
       <LeadQueueFolderPickerModal
         open={folderPickerOpen}
-        selectedFolder={folder}
-        onSelect={(pick) => setFolder(pick)}
+        selectedFolder={null}
+        excludeFolderIds={selectedFolderIds}
+        onSelect={handleAddFolder}
         onClose={() => setFolderPickerOpen(false)}
       />
     </>

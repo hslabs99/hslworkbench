@@ -16,9 +16,11 @@ function truncate(str, max = 72) {
   return `${s.slice(0, max - 1)}…`
 }
 
+import { formatLeadQueueFoldersLabel, hasLeadQueueFolders } from '../unassignedQueue.js'
+
 export function UnassignedQueueScanConfirmModal({
   open,
-  leadQueueFolder,
+  leadQueueFolders,
   days,
   deepScan,
   forceRescan,
@@ -30,7 +32,8 @@ export function UnassignedQueueScanConfirmModal({
 }) {
   if (!open) return null
 
-  const folderLabel = leadQueueFolder?.displayName || leadQueueFolder?.path || 'lead queue folder'
+  const folderLabel = formatLeadQueueFoldersLabel(leadQueueFolders) || 'lead queue folders'
+  const folderCount = leadQueueFolders?.length ?? 0
 
   return (
     <div className="modal-backdrop confirm-modal-backdrop" role="presentation" onClick={onCancel}>
@@ -45,9 +48,10 @@ export function UnassignedQueueScanConfirmModal({
         </h2>
         <div className="column-scan-confirm-body">
           <p className="confirm-modal-message">
-            Scans <strong>{folderLabel}</strong> for unique senders, creates one Unassigned card per
-            prospect (skips emails already on assigned projects), then summarises mail for each card
-            from that folder and Sent Items.
+            Scans <strong>{folderLabel}</strong>
+            {folderCount > 1 ? ` (${folderCount} folders)` : ''} for unique senders, creates one
+            Unassigned card per prospect (skips emails already on assigned projects), then
+            summarises mail for each card from those folders and Sent Items.
           </p>
           <label className="column-scan-confirm-days">
             Last
@@ -90,7 +94,7 @@ export function UnassignedQueueScanConfirmModal({
             type="button"
             className="btn-primary"
             onClick={onConfirm}
-            disabled={!leadQueueFolder?.id}
+            disabled={!hasLeadQueueFolders(leadQueueFolders)}
           >
             Start scan
           </button>
@@ -179,7 +183,7 @@ export default function UnassignedQueueScanProgressModal({
               <ul className="column-scan-summary-list">
                 <li>
                   {summary.prospectsFound} prospect{summary.prospectsFound === 1 ? '' : 's'} found
-                  in folder
+                  in folder{summary.prospectsFound === 1 ? '' : 's'}
                 </li>
                 {summary.cardsCreated > 0 && (
                   <li>

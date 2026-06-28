@@ -170,7 +170,10 @@ export function projectClientMailFolder(project) {
 
 export function projectContactEmails(project) {
   const contacts = Array.isArray(project?.clientContacts) ? project.clientContacts : []
-  return [...new Set(contacts.map((c) => normalizeEmail(c.email)).filter(Boolean))]
+  const emails = contacts.map((c) => normalizeEmail(c.email)).filter(Boolean)
+  const prospect = project?.prospectEmail ? normalizeEmail(project.prospectEmail) : ''
+  if (prospect) emails.push(prospect)
+  return [...new Set(emails)]
 }
 
 export function projectClientContacts(project) {
@@ -247,6 +250,52 @@ export function harvestToCcAddresses(messages, { excludeEmails = [] } = {}) {
   return [...byEmail.values()].sort((a, b) => a.email.localeCompare(b.email))
 }
 
+/**
+ * Best-guess primary client contact from folder mail — prefers the most frequent external sender.
+ */
+export function pickPrimaryContactFromFolderMessages(messages, { excludeEmails = [] } = {}) {
+  const exclude = new Set(excludeEmails.map(normalizeEmail).filter(Boolean))
+  const fromCounts = new Map()
+  const fromNames = new Map()
+  const allCounts = new Map()
+  const allNames = new Map()
+
+  function bump(map, names, key, entry) {
+    if (!key || exclude.has(key)) return
+    map.set(key, (map.get(key) || 0) + 1)
+    if (entry.name && !names.get(key)) names.set(key, entry.name)
+  }
+
+  for (const msg of messages) {
+    for (const entry of fromEntry(msg)) {
+      const key = normalizeEmail(entry.email)
+      bump(fromCounts, fromNames, key, entry)
+      bump(allCounts, allNames, key, entry)
+    }
+    for (const entry of recipientEntries(msg, ['toRecipients', 'ccRecipients'])) {
+      const key = normalizeEmail(entry.email)
+      bump(allCounts, allNames, key, entry)
+    }
+  }
+
+  function pickBest(counts, names) {
+    let best = null
+    for (const [key, count] of counts) {
+      if (
+        !best ||
+        count > best.count ||
+        (count === best.count && key.localeCompare(best.email) < 0)
+      ) {
+        best = { email: key, count, name: names.get(key) || '' }
+      }
+    }
+    if (!best) return null
+    return { email: best.email, name: best.name }
+  }
+
+  return pickBest(fromCounts, fromNames) || pickBest(allCounts, allNames)
+}
+
 /** Append harvested addresses to clientContacts without duplicating by email. */
 export function mergeHarvestedClientContacts(existingContacts, harvested) {
   const existing = Array.isArray(existingContacts) ? existingContacts : []
@@ -283,7 +332,8 @@ export async function harvestClientEmailsFromFolder(
   ].filter(Boolean)
   const harvested = harvestToCcAddresses(messages, { excludeEmails })
   const { merged, added } = mergeHarvestedClientContacts(existingContacts, harvested)
-  return { merged, added, messagesScanned: messages.length }
+  const primary = pickPrimaryContactFromFolderMessages(messages, { excludeEmails })
+  return { merged, added, messagesScanned: messages.length, primary, harvested }
 }
 
 function messageAddresses(message) {

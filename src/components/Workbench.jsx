@@ -15,6 +15,7 @@ import { useBoardSilos } from '../hooks/useBoardSilos.js'
 import { useUnassignedQueue } from '../hooks/useUnassignedQueue.js'
 import {
   boardSilosWithUnassigned,
+  hasLeadQueueFolders,
   isUnassignedSiloId,
   UNASSIGNED_SILO_ID,
   updateUnassignedQueueSettings,
@@ -36,12 +37,15 @@ import { recordProjectSiloChange } from '../projectHistory.js'
 import { recordProjectClientMailScan } from '../projectMailScan.js'
 import { runColumnCommunicationScan } from '../columnScan.js'
 import { partitionScannableProjects } from '../projectCommunicationScan.js'
+import { buildScanAllStageOptions, runScanAll } from '../scanAll.js'
+import { normalizeScanDays } from '../unassignedQueue.js'
 import { fetchAiConfig } from '../openaiCommunicationSummary.js'
 import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
 import { useHarvestExclusions } from './HarvestExclusionsSection.jsx'
 import ColumnScanProgressModal, {
   ColumnScanConfirmModal,
 } from './ColumnScanModal.jsx'
+import ScanAllProgressModal, { ScanAllConfirmModal } from './ScanAllModal.jsx'
 import SiloColumn from './SiloColumn.jsx'
 import UnassignedColumn from './UnassignedColumn.jsx'
 import AddSiloColumn from './AddSiloColumn.jsx'
@@ -65,7 +69,7 @@ export default function Workbench() {
   const { configured, account, getAccessToken } = useMicrosoftAuth()
   const { excludeEmails: harvestExclusions } = useHarvestExclusions()
   const { silos, loading: silosLoading, error: silosError } = useBoardSilos()
-  const { leadQueueFolder, scanDays, deepScan, forceRescan, error: unassignedQueueError } =
+  const { leadQueueFolders, scanDays, deepScan, forceRescan, error: unassignedQueueError } =
     useUnassignedQueue()
   const boardSilos = useMemo(() => boardSilosWithUnassigned(silos), [silos])
   const [projects, setProjects] = useState([])
@@ -88,6 +92,17 @@ export default function Workbench() {
   const [columnScanSummary, setColumnScanSummary] = useState(null)
   const [columnScanError, setColumnScanError] = useState(null)
   const columnScanCancelRef = useRef(false)
+  const [scanAllConfirmOpen, setScanAllConfirmOpen] = useState(false)
+  const [scanAllSelectedUnassigned, setScanAllSelectedUnassigned] = useState(true)
+  const [scanAllSelectedColumnIds, setScanAllSelectedColumnIds] = useState(() => new Set())
+  const [scanAllDays, setScanAllDays] = useState(30)
+  const [scanAllDeep, setScanAllDeep] = useState(true)
+  const [scanAllForceRescan, setScanAllForceRescan] = useState(false)
+  const [scanAllRunning, setScanAllRunning] = useState(false)
+  const [scanAllProgress, setScanAllProgress] = useState(null)
+  const [scanAllSummary, setScanAllSummary] = useState(null)
+  const [scanAllError, setScanAllError] = useState(null)
+  const scanAllCancelRef = useRef(false)
   const [deleteSiloId, setDeleteSiloId] = useState(null)
   const [deleteSiloBusy, setDeleteSiloBusy] = useState(false)
   const { items: techStackOptions, loading: techStackLookupLoading } = useTechStackLookup()
@@ -500,6 +515,112 @@ export default function Workbench() {
     : []
   const columnScanPartition = partitionScannableProjects(columnScanConfirmProjects)
 
+  const scanAllStageOptions = useMemo(
+    () =>
+      buildScanAllStageOptions({
+        silos,
+        bySilo,
+        resolveSiloTitle,
+        leadQueueFolders,
+      }),
+    [silos, bySilo, leadQueueFolders, siloTitles],
+  )
+
+  useEffect(() => {
+    if (!scanAllConfirmOpen) return
+    setScanAllSelectedColumnIds(new Set(silos.map((s) => s.id)))
+    setScanAllSelectedUnassigned(hasLeadQueueFolders(leadQueueFolders))
+    setScanAllDays(scanDays)
+    setScanAllDeep(deepScan)
+    setScanAllForceRescan(forceRescan)
+  }, [scanAllConfirmOpen, silos, leadQueueFolders, scanDays, deepScan, forceRescan])
+
+  function handleOpenScanAll() {
+    if (!configured || !account) {
+      window.alert('Connect Microsoft email in Settings before scanning.')
+      return
+    }
+    setScanAllConfirmOpen(true)
+  }
+
+  function resetScanAllUi() {
+    scanAllCancelRef.current = false
+    setScanAllRunning(false)
+    setScanAllConfirmOpen(false)
+    setScanAllProgress(null)
+    setScanAllSummary(null)
+    setScanAllError(null)
+  }
+
+  function handleScanAllCancel() {
+    if (scanAllRunning) {
+      scanAllCancelRef.current = true
+      return
+    }
+    resetScanAllUi()
+  }
+
+  async function handleStartScanAll() {
+    const includeUnassigned = scanAllSelectedUnassigned && hasLeadQueueFolders(leadQueueFolders)
+    const selectedColumns = silos.filter((s) => scanAllSelectedColumnIds.has(s.id))
+    const stageCount = selectedColumns.length + (includeUnassigned ? 1 : 0)
+    if (stageCount === 0) return
+
+    scanAllCancelRef.current = false
+    setScanAllConfirmOpen(false)
+    setScanAllRunning(true)
+    setScanAllProgress({
+      stageIndex: 0,
+      stageTotal: stageCount,
+      stageName: '',
+      stageType: 'fetching',
+      phase: 'fetching',
+      cardIndex: 0,
+      cardTotal: 0,
+      cardName: '',
+      emailIndex: 0,
+      emailTotal: 0,
+      emailSubject: '',
+      percent: 0,
+    })
+    setScanAllSummary(null)
+    setScanAllError(null)
+
+    try {
+      const token = await getAccessToken()
+      if (!token) throw new Error('Microsoft sign-in required.')
+
+      const summary = await runScanAll({
+        includeUnassigned,
+        unassignedProjects: bySilo[UNASSIGNED_SILO_ID] || [],
+        allProjects: projects,
+        leadQueueFolders,
+        columnSilos: selectedColumns.map((silo) => ({
+          id: silo.id,
+          title: resolveSiloTitle(silo.id),
+          projects: bySilo[silo.id] || [],
+        })),
+        accessToken: token,
+        excludeEmails: harvestExclusions,
+        userEmail: account?.username || '',
+        days: normalizeScanDays(scanAllDays),
+        deepScan: scanAllDeep,
+        forceRescan: scanAllForceRescan,
+        batchSize: scanBatchSize,
+        promptOverrides,
+        onRecordClientMailScan: recordProjectClientMailScan,
+        onUpdateQueueSettings: handleUpdateUnassignedQueueSettings,
+        isCancelled: () => scanAllCancelRef.current,
+        onProgress: setScanAllProgress,
+      })
+      setScanAllSummary(summary)
+    } catch (err) {
+      setScanAllError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setScanAllRunning(false)
+    }
+  }
+
   const canDeleteList = silos.length > 1
   const deleteSiloTarget = deleteSiloId ? findSilo(silos, deleteSiloId) : null
   const deleteSiloProjectCount = deleteSiloId ? (bySilo[deleteSiloId] || []).length : 0
@@ -548,6 +669,9 @@ export default function Workbench() {
         <button type="button" className="btn-primary" onClick={openAdd}>
           Add project
         </button>
+        <button type="button" className="btn-secondary" onClick={handleOpenScanAll}>
+          Scan all
+        </button>
         {loading && <span className="muted">Loading…</span>}
         {silosLoading && silos.length === 0 && <span className="muted">Loading lists…</span>}
         {error && <span className="error-text">{error}</span>}
@@ -571,7 +695,7 @@ export default function Workbench() {
             <UnassignedColumn
               projects={bySilo[UNASSIGNED_SILO_ID] || []}
               allProjects={projects}
-              leadQueueFolder={leadQueueFolder}
+              leadQueueFolders={leadQueueFolders}
               scanDays={scanDays}
               deepScan={deepScan}
               forceRescan={forceRescan}
@@ -700,6 +824,46 @@ export default function Workbench() {
         summary={columnScanSummary}
         error={columnScanError}
         onCancel={handleColumnScanCancel}
+      />
+
+      <ScanAllConfirmModal
+        open={scanAllConfirmOpen}
+        stageOptions={scanAllStageOptions}
+        selectedUnassigned={scanAllSelectedUnassigned}
+        selectedColumnIds={scanAllSelectedColumnIds}
+        days={scanAllDays}
+        deepScan={scanAllDeep}
+        forceRescan={scanAllForceRescan}
+        onToggleUnassigned={setScanAllSelectedUnassigned}
+        onToggleColumn={(id, checked) => {
+          setScanAllSelectedColumnIds((prev) => {
+            const next = new Set(prev)
+            if (checked) next.add(id)
+            else next.delete(id)
+            return next
+          })
+        }}
+        onSelectAll={() => {
+          setScanAllSelectedColumnIds(new Set(silos.map((s) => s.id)))
+          setScanAllSelectedUnassigned(hasLeadQueueFolders(leadQueueFolders))
+        }}
+        onSelectNone={() => {
+          setScanAllSelectedColumnIds(new Set())
+          setScanAllSelectedUnassigned(false)
+        }}
+        onDaysChange={setScanAllDays}
+        onDeepScanChange={setScanAllDeep}
+        onForceRescanChange={setScanAllForceRescan}
+        onConfirm={handleStartScanAll}
+        onCancel={() => setScanAllConfirmOpen(false)}
+      />
+
+      <ScanAllProgressModal
+        open={scanAllRunning || Boolean(scanAllSummary) || Boolean(scanAllError)}
+        progress={scanAllProgress}
+        summary={scanAllSummary}
+        error={scanAllError}
+        onCancel={handleScanAllCancel}
       />
     </div>
   )

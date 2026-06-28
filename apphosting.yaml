@@ -1,0 +1,14 @@
+# Firebase App Hosting — Vite + React SPA (static build served by superstatic on Cloud Run).
+# Not Next.js: build produces dist/; start must listen on PORT (injected as 8080).
+
+runConfig:
+  minInstances: 0
+  maxInstances: 4
+  concurrency: 80
+
+env:
+  - variable: NODE_ENV
+    value: production
+    availability:
+      - BUILD
+      - RUNTIME

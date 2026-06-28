@@ -36,6 +36,10 @@ export default function ProjectCard({
 
   const attention = normalizeAttention(project.attention)
   const actionWith = project.nextActionOwner?.trim() || ''
+  const primaryContact =
+    Array.isArray(project.clientContacts) && project.clientContacts[0]
+      ? project.clientContacts[0].name?.trim() || ''
+      : ''
 
   const { colors: attentionColors, tooltips: attentionTooltips } = useAttentionLights()
 
@@ -176,6 +180,9 @@ export default function ProjectCard({
         <h3 className="project-card-title">{project.projectName || 'Untitled'}</h3>
 
         <p className="project-card-client">{project.clientCompany || '—'}</p>
+        {primaryContact ? (
+          <p className="project-card-contact">{primaryContact}</p>
+        ) : null}
 
         <div className="project-card-action-row">
 

@@ -72,7 +72,44 @@ function messageAddresses(message) {
 }
 
 function messageDate(message) {
+  if (message.direction === 'outbound') {
+    return message.sentDateTime || message.receivedDateTime || null
+  }
   return message.receivedDateTime || message.sentDateTime || null
+}
+
+function recipientAddresses(message) {
+  const addrs = []
+  for (const r of message.toRecipients || []) {
+    const a = recipientAddressFromGraph(r)
+    if (a) addrs.push(a)
+  }
+  for (const r of message.ccRecipients || []) {
+    const a = recipientAddressFromGraph(r)
+    if (a) addrs.push(a)
+  }
+  for (const r of message.bccRecipients || []) {
+    const a = recipientAddressFromGraph(r)
+    if (a) addrs.push(a)
+  }
+  return addrs
+}
+
+function outboundMatchesClientEmails(message, clientEmails) {
+  const clientSet = new Set(clientEmails.map(normalizeEmail).filter(Boolean))
+  if (!clientSet.size) return false
+  return recipientAddresses(message).some((a) => clientSet.has(a))
+}
+
+/** Inbound: skip when sender is excluded. Outbound: skip when a client recipient is excluded. */
+function isCommunicationExcluded(message, clientEmails, excludeEmails, { outbound = false } = {}) {
+  if (outbound) {
+    const clientSet = new Set(clientEmails.map(normalizeEmail).filter(Boolean))
+    return recipientAddresses(message).some(
+      (a) => clientSet.has(a) && isExcludedHarvestEmail(a, excludeEmails),
+    )
+  }
+  return isFromExcluded(message, excludeEmails)
 }
 
 function messageMatchesClientEmails(message, clientEmails) {
@@ -109,6 +146,49 @@ function messageMeetsCutoff(message, sinceMs, options = {}) {
   return t >= sinceMs
 }
 
+/** OData DateTimeOffset literal for Graph $filter (unquoted — quoted values are Edm.String). */
+function toGraphODataDateTime(iso) {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  return d.toISOString().replace(/\.\d{3}Z$/, 'Z')
+}
+
+async function fetchMessagesSincePaged(accessToken, folderId, {
+  sinceIso,
+  sinceMs,
+  maxMessages,
+  dateField,
+  preferSent,
+}) {
+  const cap = maxMessages
+  const messages = []
+  const url = new URL(`${GRAPH}/me/mailFolders/${folderId}/messages`)
+  url.searchParams.set('$top', '100')
+  url.searchParams.set('$orderby', `${dateField} desc`)
+  url.searchParams.set('$select', MESSAGE_SELECT)
+
+  const filterDate = sinceIso ? toGraphODataDateTime(sinceIso) : null
+  if (filterDate) {
+    url.searchParams.set('$filter', `${dateField} ge ${filterDate}`)
+  }
+
+  let next = url.toString()
+  while (next && messages.length < cap) {
+    const data = await graphGet(accessToken, next)
+    const batch = data.value || []
+    for (const msg of batch) {
+      if (sinceMs && !messageMeetsCutoff(msg, sinceMs, { preferSent })) continue
+      messages.push(msg)
+      if (messages.length >= cap) break
+    }
+    if (messages.length >= cap) break
+    next = data['@odata.nextLink'] || null
+  }
+
+  return messages.slice(0, cap)
+}
+
 export async function fetchMessagesSince(
   accessToken,
   folderId,
@@ -122,29 +202,33 @@ export async function fetchMessagesSince(
   const cap = deepScan ? DEEP_SCAN_MAX_PER_SOURCE : maxMessages
   const sinceMs = sinceIso ? new Date(sinceIso).getTime() : 0
   const preferSent = dateField === 'sentDateTime'
-  const messages = []
-  const url = new URL(`${GRAPH}/me/mailFolders/${folderId}/messages`)
-  url.searchParams.set('$top', '100')
-  url.searchParams.set('$orderby', `${dateField} desc`)
-  url.searchParams.set('$select', MESSAGE_SELECT)
-  if (sinceIso) {
-    url.searchParams.set('$filter', `${dateField} ge ${sinceIso}`)
+  const opts = { sinceIso, sinceMs, maxMessages: cap, dateField, preferSent }
+
+  if (!sinceIso) {
+    return fetchMessagesSincePaged(accessToken, folderId, opts)
   }
 
-  let next = url.toString()
-  while (next && messages.length < cap) {
-    const data = await graphGet(accessToken, next)
-    const batch = data.value || []
-    for (const msg of batch) {
-      if (sinceIso && !messageMeetsCutoff(msg, sinceMs, { preferSent })) continue
-      messages.push(msg)
-      if (messages.length >= cap) break
-    }
-    if (messages.length >= cap) break
-    next = data['@odata.nextLink'] || null
+  try {
+    return await fetchMessagesSincePaged(accessToken, folderId, opts)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const filterFailed =
+      msg.includes('Invalid filter') ||
+      msg.includes('Incompatible types') ||
+      msg.includes('binary operator')
+    if (!filterFailed) throw err
+    return fetchMessagesSincePaged(accessToken, folderId, { ...opts, sinceIso: null })
   }
+}
 
-  return messages.slice(0, cap)
+async function fetchSentMessagesSince(accessToken, sinceIso, sinceMs, fetchOpts) {
+  const opts = { ...fetchOpts, dateField: 'sentDateTime' }
+  try {
+    return await fetchMessagesSince(accessToken, 'sentitems', sinceIso, opts)
+  } catch {
+    const batch = await fetchMessagesSince(accessToken, 'sentitems', null, opts)
+    return batch.filter((msg) => messageMeetsCutoff(msg, sinceMs, { preferSent: true }))
+  }
 }
 
 async function fetchMessageAttachments(accessToken, messageId) {
@@ -254,10 +338,7 @@ export async function fetchCommunicationSummaryRows(
       ...fetchOpts,
       dateField: 'receivedDateTime',
     }),
-    fetchMessagesSince(accessToken, 'sentitems', sinceIso, {
-      ...fetchOpts,
-      dateField: 'sentDateTime',
-    }),
+    fetchSentMessagesSince(accessToken, sinceIso, sinceMs, fetchOpts),
     fetchMessagesSince(accessToken, clientFolderId, null, {
       maxMessages: deepScan ? DEEP_SCAN_MAX_PER_SOURCE : 500,
       deepScan: false,
@@ -285,8 +366,8 @@ export async function fetchCommunicationSummaryRows(
 
   const outbound = sentMessages
     .filter((msg) => inWindow(msg, { preferSent: true }))
-    .filter((msg) => messageMatchesClientEmails(msg, emails))
-    .filter((msg) => !isFromExcluded(msg, excludeEmails))
+    .filter((msg) => outboundMatchesClientEmails(msg, emails))
+    .filter((msg) => !isCommunicationExcluded(msg, emails, excludeEmails, { outbound: true }))
     .map((msg) => ({ ...msg, direction: 'outbound', inInbox: false }))
 
   const combinedRaw = [...inboundFiled, ...inboundInbox, ...outbound]
