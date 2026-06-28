@@ -5,6 +5,7 @@ import {
   resolvePromptSet,
 } from './aiPrompts.js'
 import { formatOpenAIError } from './openaiErrors.js'
+import { openAiKeyMissingMessage } from './envHints.js'
 
 function formatTypeLabelAfterAi(row, type) {
   const dir = row.direction === 'outbound' ? 'Outbound' : row.inInbox ? 'Inbound (Inbox)' : 'Inbound'
@@ -42,9 +43,7 @@ export async function summariseEmailBatch(
   { apiKey, model, promptVariant = 'project', promptOverrides = {} },
 ) {
   if (!apiKey) {
-    throw new Error(
-      'OPENAI_API_KEY is not set. Add it to .env.local and restart npm run dev.',
-    )
+    throw new Error(openAiKeyMissingMessage())
   }
 
   const promptSet = resolvePromptSet(promptVariant, promptOverrides)

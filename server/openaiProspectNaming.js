@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import { DEFAULT_PROSPECT_NAME_SYSTEM_PROMPT } from '../src/prospectProjectNaming.js'
 import { formatOpenAIError } from './openaiErrors.js'
+import { openAiKeyMissingMessage } from './envHints.js'
 
 function sanitizeProjectName(raw) {
   let name = String(raw || '')
@@ -18,9 +19,7 @@ export async function suggestProspectProjectName(
 ) {
   const apiKey = env.OPENAI_API_KEY
   if (!apiKey) {
-    throw new Error(
-      'OPENAI_API_KEY is not set. Add it to .env.local and restart npm run dev.',
-    )
+    throw new Error(openAiKeyMissingMessage())
   }
 
   const systemPrompt =

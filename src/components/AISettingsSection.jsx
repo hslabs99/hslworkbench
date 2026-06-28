@@ -178,9 +178,9 @@ export default function AISettingsSection() {
       <div className="systems-card ai-settings-card">
         <h4 className="ai-settings-subheading">Connection</h4>
         <p className="muted ai-settings-hint">
-          Key: <code>OPENAI_API_KEY</code> in <code>.env.local</code> (server only). Model:{' '}
-          <code>OPENAI_MODEL</code> (default <code>gpt-4o-mini</code>). Restart{' '}
-          <code>npm run dev</code> after env changes.
+          Key: Google Secret Manager <code>openaiApiKey</code> (server only, not in the browser).
+          Model: <code>OPENAI_MODEL</code> (default <code>gpt-4o-mini</code>). Local dev:{' '}
+          <code>gcloud auth application-default login</code>.
         </p>
 
         {config && (
@@ -192,7 +192,7 @@ export default function AISettingsSection() {
               </>
             ) : (
               <span className="form-error" style={{ display: 'inline' }}>
-                OPENAI_API_KEY not loaded — add to .env.local and restart dev server.
+                OpenAI key not loaded — check Secret Manager secret openaiApiKey and gcloud auth.
               </span>
             )}
           </p>

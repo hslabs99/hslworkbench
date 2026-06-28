@@ -1,4 +1,4 @@
-# Firebase App Hosting — Vite + React SPA (static build served by superstatic on Cloud Run).
+# Firebase App Hosting — Vite + React SPA (static build + /api routes on Cloud Run).
 # Not Next.js: build produces dist/; start must listen on PORT (injected as 8080).
 
 runConfig:
@@ -11,3 +11,33 @@ env:
     value: production
     availability:
       - RUNTIME
+
+  # OpenAI — server-side only (RUNTIME). Create secret first:
+  #   firebase apphosting:secrets:set openaiApiKey
+  #   firebase apphosting:secrets:grantaccess openaiApiKey
+  - variable: OPENAI_API_KEY
+    secret: openaiApiKey
+    availability:
+      - RUNTIME
+
+  - variable: OPENAI_MODEL
+    value: gpt-4o-mini
+    availability:
+      - RUNTIME
+
+  # Microsoft sign-in (Vite inlines VITE_* at BUILD — .env.local is not used on App Hosting)
+  - variable: VITE_MS_TENANT_ID
+    value: 78147069-d2a8-43c7-b8b1-67e544b8f893
+    availability:
+      - BUILD
+
+  - variable: VITE_MS_CLIENT_ID
+    value: 9aa8f5a2-d92a-460a-86c4-3c7fcde11f40
+    availability:
+      - BUILD
+
+  # Optional — if omitted, msalConfig uses {origin}/auth/microsoft/callback at runtime
+  # - variable: VITE_MS_REDIRECT_URI
+  #   value: https://hslworkbench--hslworkbench.asia-southeast1.hosted.app/auth/microsoft/callback
+  #   availability:
+  #     - BUILD

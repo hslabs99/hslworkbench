@@ -1,5 +1,5 @@
 /**
- * Dev server proxies to Vite plugin (OPENAI_API_KEY in .env.local, not exposed to browser).
+ * Server proxies to /api routes (OpenAI key from Google Secret Manager, not exposed to browser).
  */
 
 const DEFAULT_BATCH_SIZE = 12

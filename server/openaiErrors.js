@@ -13,8 +13,8 @@ export function formatOpenAIError(err) {
 
   if (lower.includes('401') || lower.includes('incorrect api key') || lower.includes('invalid_api_key')) {
     return (
-      'Invalid OpenAI API key. Create or copy a key from https://platform.openai.com/api-keys into ' +
-      'OPENAI_API_KEY in .env.local, then restart npm run dev.'
+      'Invalid OpenAI API key. Update the openaiApiKey secret in Google Secret Manager ' +
+      '(https://platform.openai.com/api-keys), then restart the server.'
     )
   }
 

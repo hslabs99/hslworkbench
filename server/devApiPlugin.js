@@ -1,9 +1,8 @@
 import { loadEnv } from 'vite'
-import { getAiPromptConfig } from './aiPrompts.js'
-import { formatOpenAIError } from './openaiErrors.js'
-import { summariseAllEmails } from './openaiSummarise.js'
-import { suggestProspectProjectName } from './openaiProspectNaming.js'
+import { handleOpenAiApi } from './openaiApi.js'
+import { readJsonBody, sendJson } from './httpUtils.js'
 import { seedDevUsersOnce } from './seedUsers.js'
+import { ensureServerSecrets } from './secrets.js'
 import {
   analyzeSqlExportAsync,
   buildImportCommand,
@@ -24,36 +23,23 @@ import {
   testSupabaseConnectivity,
 } from './celgpsMigration.js'
 
-function readJsonBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', (chunk) => {
-      data += chunk
-    })
-    req.on('end', () => {
-      try {
-        resolve(data ? JSON.parse(data) : {})
-      } catch (e) {
-        reject(e)
-      }
-    })
-    req.on('error', reject)
-  })
-}
-
-function sendJson(res, statusCode, body) {
-  res.statusCode = statusCode
-  res.setHeader('Content-Type', 'application/json')
-  res.end(JSON.stringify(body))
-}
-
 /** Vite dev-only API: OpenAI summarise + config (key stays on server). */
 export function devApiPlugin() {
   return {
     name: 'hsl-dev-api',
     configureServer(server) {
       const env = loadEnv('', process.cwd(), '')
-      Object.assign(process.env, env)
+      for (const [key, value] of Object.entries(env)) {
+        if (key === 'OPENAI_API_KEY') continue
+        process.env[key] = value
+      }
+
+      const secretsReady = ensureServerSecrets().catch((err) => {
+        console.warn(
+          '[hsl-workbench] OpenAI secret load failed:',
+          err instanceof Error ? err.message : String(err),
+        )
+      })
 
       seedDevUsersOnce()
         .then((result) => {
@@ -71,8 +57,11 @@ export function devApiPlugin() {
       server.middlewares.use(async (req, res, next) => {
         const path = req.url?.split('?')[0]
 
-        if (path === '/api/ai-config' && req.method === 'GET') {
-          sendJson(res, 200, getAiPromptConfig(process.env))
+        if (path?.startsWith('/api/')) {
+          await secretsReady
+        }
+
+        if (await handleOpenAiApi(req, res, path, process.env)) {
           return
         }
 
@@ -231,108 +220,7 @@ export function devApiPlugin() {
           return
         }
 
-        if (path === '/api/test-openai' && req.method === 'POST') {
-          try {
-            const apiKey = process.env.OPENAI_API_KEY
-            if (!apiKey) {
-              sendJson(res, 500, {
-                error:
-                  'OPENAI_API_KEY is not set. Add it to .env.local and restart npm run dev.',
-              })
-              return
-            }
-
-            const { default: OpenAI } = await import('openai')
-            const client = new OpenAI({ apiKey })
-            const model = process.env.OPENAI_MODEL || 'gpt-4o-mini'
-            let completion
-            try {
-              completion = await client.chat.completions.create({
-                model,
-                max_tokens: 16,
-                messages: [{ role: 'user', content: 'Reply with exactly the word OK.' }],
-              })
-            } catch (err) {
-              sendJson(res, 500, { error: formatOpenAIError(err) })
-              return
-            }
-            const reply = completion.choices[0]?.message?.content?.trim() || ''
-
-            sendJson(res, 200, { ok: true, model, reply })
-          } catch (err) {
-            sendJson(res, 500, {
-              error: formatOpenAIError(err),
-            })
-          }
-          return
-        }
-
-        if (path === '/api/suggest-prospect-name' && req.method === 'POST') {
-          try {
-            const body = await readJsonBody(req)
-            const { senderEmail, senderName, subject, body: emailBody, promptOverrides } = body
-            if (!senderEmail && !subject && !emailBody) {
-              sendJson(res, 400, { error: 'No lead email content to name from.' })
-              return
-            }
-            const result = await suggestProspectProjectName(
-              {
-                senderEmail,
-                senderName,
-                subject,
-                body: emailBody,
-                promptOverrides: promptOverrides || {},
-              },
-              process.env,
-            )
-            sendJson(res, 200, result)
-          } catch (err) {
-            sendJson(res, 500, { error: formatOpenAIError(err) })
-          }
-          return
-        }
-
-        if (path !== '/api/summarise-communications' || req.method !== 'POST') {
-          return next()
-        }
-
-        try {
-          const body = await readJsonBody(req)
-          const {
-            rows,
-            projectName,
-            clientCompany,
-            aiContext,
-            senderEmail,
-            promptVariant,
-            promptOverrides,
-          } = body
-
-          if (!Array.isArray(rows) || rows.length === 0) {
-            sendJson(res, 400, { error: 'No emails to summarise.' })
-            return
-          }
-
-          const enriched = await summariseAllEmails(
-            rows,
-            {
-              projectName,
-              clientCompany,
-              aiContext,
-              senderEmail,
-              promptVariant,
-              promptOverrides,
-            },
-            process.env,
-            { promptVariant: promptVariant || 'project', promptOverrides: promptOverrides || {} },
-          )
-
-          sendJson(res, 200, { rows: enriched })
-        } catch (err) {
-          sendJson(res, 500, {
-            error: formatOpenAIError(err),
-          })
-        }
+        return next()
       })
     },
   }
