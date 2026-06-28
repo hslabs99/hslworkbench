@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { handleOpenAiApi } from './openaiApi.js'
+import { handleMsApi } from './msApi.js'
 import { sendJson } from './httpUtils.js'
 import { ensureServerSecrets } from './secrets.js'
 
@@ -94,6 +95,7 @@ async function main() {
 
     if (pathname.startsWith('/api/')) {
       try {
+        if (handleMsApi(req, res, pathname, process.env)) return
         const handled = await handleOpenAiApi(req, res, pathname, process.env)
         if (handled) return
         sendJson(res, 404, { error: 'API route not found.' })

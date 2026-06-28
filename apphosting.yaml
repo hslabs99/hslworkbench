@@ -25,16 +25,18 @@ env:
     availability:
       - RUNTIME
 
-  # Microsoft sign-in (Vite inlines VITE_* at BUILD — .env.local is not used on App Hosting)
+  # Microsoft sign-in (Vite inlines VITE_* at BUILD; server also serves /api/ms-config at RUNTIME)
   - variable: VITE_MS_TENANT_ID
     value: 78147069-d2a8-43c7-b8b1-67e544b8f893
     availability:
       - BUILD
+      - RUNTIME
 
   - variable: VITE_MS_CLIENT_ID
     value: 9aa8f5a2-d92a-460a-86c4-3c7fcde11f40
     availability:
       - BUILD
+      - RUNTIME
 
   # Optional — if omitted, msalConfig uses {origin}/auth/microsoft/callback at runtime
   # - variable: VITE_MS_REDIRECT_URI

@@ -1,5 +1,6 @@
 import { loadEnv } from 'vite'
 import { handleOpenAiApi } from './openaiApi.js'
+import { handleMsApi } from './msApi.js'
 import { readJsonBody, sendJson } from './httpUtils.js'
 import { seedDevUsersOnce } from './seedUsers.js'
 import { ensureServerSecrets } from './secrets.js'
@@ -59,6 +60,10 @@ export function devApiPlugin() {
 
         if (path?.startsWith('/api/')) {
           await secretsReady
+        }
+
+        if (handleMsApi(req, res, path, process.env)) {
+          return
         }
 
         if (await handleOpenAiApi(req, res, path, process.env)) {

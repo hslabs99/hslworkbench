@@ -1,15 +1,23 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { PublicClientApplication } from '@azure/msal-browser'
-import { graphScopes, isMicrosoftConfigured, msalConfig } from './msalConfig.js'
+import {
+  buildMsalConfig,
+  graphScopes,
+  isMicrosoftConfiguredFromBuild,
+  isMicrosoftConfiguredValues,
+} from './msalConfig.js'
 
 const MicrosoftAuthContext = createContext(null)
 
 let msalInstancePromise = null
+let msalInstanceKey = ''
 
-function getMsalInstance() {
-  if (!msalInstancePromise) {
+function getMsalInstance(config) {
+  const key = `${config.auth.clientId}:${config.auth.authority}:${config.auth.redirectUri}`
+  if (!msalInstancePromise || msalInstanceKey !== key) {
+    msalInstanceKey = key
     msalInstancePromise = (async () => {
-      const msal = new PublicClientApplication(msalConfig)
+      const msal = new PublicClientApplication(config)
       await msal.initialize()
       return msal
     })()
@@ -17,8 +25,29 @@ function getMsalInstance() {
   return msalInstancePromise
 }
 
+async function resolveMicrosoftConfig() {
+  if (isMicrosoftConfiguredFromBuild()) {
+    return buildMsalConfig()
+  }
+
+  try {
+    const res = await fetch('/api/ms-config')
+    if (!res.ok) return null
+    const data = await res.json()
+    if (!isMicrosoftConfiguredValues(data)) return null
+    return buildMsalConfig({
+      tenantId: data.tenantId,
+      clientId: data.clientId,
+      redirectUri: data.redirectUri || undefined,
+    })
+  } catch {
+    return null
+  }
+}
+
 export function MicrosoftAuthProvider({ children }) {
   const [ready, setReady] = useState(false)
+  const [configured, setConfigured] = useState(false)
   const [account, setAccount] = useState(null)
   const [initError, setInitError] = useState(null)
 
@@ -26,13 +55,19 @@ export function MicrosoftAuthProvider({ children }) {
     let cancelled = false
 
     async function init() {
-      if (!isMicrosoftConfigured()) {
-        if (!cancelled) setReady(true)
+      const config = await resolveMicrosoftConfig()
+      if (cancelled) return
+
+      if (!config?.auth?.clientId || !config.auth.authority) {
+        setConfigured(false)
+        setReady(true)
         return
       }
 
+      setConfigured(true)
+
       try {
-        const msal = await getMsalInstance()
+        const msal = await getMsalInstance(config)
         const result = await msal.handleRedirectPromise()
         if (result?.account) {
           msal.setActiveAccount(result.account)
@@ -59,17 +94,23 @@ export function MicrosoftAuthProvider({ children }) {
   }, [])
 
   const login = useCallback(async () => {
-    const msal = await getMsalInstance()
+    const config = await resolveMicrosoftConfig()
+    if (!config) throw new Error('Microsoft sign-in is not configured.')
+    const msal = await getMsalInstance(config)
     await msal.loginRedirect({ scopes: graphScopes })
   }, [])
 
   const logout = useCallback(async () => {
-    const msal = await getMsalInstance()
+    const config = await resolveMicrosoftConfig()
+    if (!config) return
+    const msal = await getMsalInstance(config)
     await msal.logoutRedirect()
   }, [])
 
   const getAccessToken = useCallback(async () => {
-    const msal = await getMsalInstance()
+    const config = await resolveMicrosoftConfig()
+    if (!config) throw new Error('Microsoft sign-in is not configured.')
+    const msal = await getMsalInstance(config)
     const active = msal.getActiveAccount() || msal.getAllAccounts()[0]
     if (!active) throw new Error('Not signed in to Microsoft.')
 
@@ -85,7 +126,7 @@ export function MicrosoftAuthProvider({ children }) {
   const value = useMemo(
     () => ({
       ready,
-      configured: isMicrosoftConfigured(),
+      configured,
       account,
       initError,
       login,
@@ -94,7 +135,7 @@ export function MicrosoftAuthProvider({ children }) {
       userEmail: account?.username || '',
       userName: account?.name || '',
     }),
-    [ready, account, initError, login, logout, getAccessToken],
+    [ready, configured, account, initError, login, logout, getAccessToken],
   )
 
   return (

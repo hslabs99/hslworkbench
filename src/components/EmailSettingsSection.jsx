@@ -28,16 +28,16 @@ export default function EmailSettingsSection() {
         <p className="lookup-section-intro muted">
           {import.meta.env.DEV ? (
             <>
-              Add <code>VITE_MS_TENANT_ID</code>, <code>VITE_MS_CLIENT_ID</code>, and{' '}
-              <code>VITE_MS_REDIRECT_URI</code> to <code>.env.local</code>, then restart{' '}
-              <code>npm run dev</code>.
+              Add <code>VITE_MS_TENANT_ID</code> and <code>VITE_MS_CLIENT_ID</code> to{' '}
+              <code>.env.local</code>, then restart <code>npm run dev</code>. Redirect URI is
+              optional — the app uses{' '}
+              <code>{window.location.origin}/auth/microsoft/callback</code> by default.
             </>
           ) : (
             <>
               Microsoft sign-in is not configured on this deployment. Set{' '}
               <code>VITE_MS_TENANT_ID</code> and <code>VITE_MS_CLIENT_ID</code> in{' '}
-              <code>apphosting.yaml</code> (build time) and redeploy. Also register the hosted
-              redirect URI in Azure:{' '}
+              <code>apphosting.yaml</code> and redeploy. Register this redirect URI in Azure:{' '}
               <code>{window.location.origin}/auth/microsoft/callback</code>
             </>
           )}
