@@ -51,7 +51,7 @@ export function useAttentionLights() {
   if (!ctx) {
     return {
       colors: DEFAULT_ATTENTION_COLORS,
-      tooltips: { green: '', orange: '', red: '' },
+      tooltips: { green: '', orange: '', red: '', clear: '' },
       setColor: () => {},
       setTooltip: () => {},
     }

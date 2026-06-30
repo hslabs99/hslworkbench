@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useAttentionLights } from '../AttentionLightsContext.jsx'
-import { attentionHoverTitle, attentionLabel, normalizeAttention } from '../attention.js'
+import { attentionHoverTitle, attentionLabel, attentionLightStyle, normalizeAttention } from '../attention.js'
 import { formatUsd } from '../formatMoney.js'
 import { projectClientMailFolder } from '../graphMail.js'
 import DetailLookupsModal from './DetailLookupsModal.jsx'
@@ -193,11 +193,15 @@ export default function ProjectDetailPanel({
                 {onCycleAttention && (
                   <button
                     type="button"
-                    className="attention-light attention-light--large attention-light--dynamic"
-                    style={{
-                      background: attentionColors[attentionLevel],
-                      borderColor: attentionColors[attentionLevel],
-                    }}
+                    className={[
+                      'attention-light',
+                      'attention-light--large',
+                      'attention-light--dynamic',
+                      attentionLevel === 'clear' ? 'attention-light--clear' : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    style={attentionLightStyle(attentionLevel, attentionColors)}
                     title={attentionHoverTitle(attentionLevel, attentionTooltips)}
                     aria-label="Cycle attention level"
                     onClick={() => onCycleAttention(project.id)}

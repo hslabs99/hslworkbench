@@ -2,6 +2,11 @@ import { useEffect, useState } from 'react'
 import ProjectCard from './ProjectCard.jsx'
 import SiloColumnMenu from './SiloColumnMenu.jsx'
 import SiloTitle from './SiloTitle.jsx'
+import { SILO_REORDER_MIME } from '../boardSilos.js'
+
+function isSiloReorderDrag(e) {
+  return [...(e.dataTransfer?.types || [])].includes(SILO_REORDER_MIME)
+}
 
 export default function SiloColumn({
   silo,
@@ -21,6 +26,12 @@ export default function SiloColumn({
   onScanColumn,
   onDeleteSilo,
   canDeleteList,
+  siloReorderSlot = null,
+  siloDragging = false,
+  siloReordering = false,
+  onSiloReorderDragStart,
+  onSiloReorderDragOver,
+  onSiloReorderDrop,
 }) {
   const [dragOver, setDragOver] = useState(false)
   const [dropIndicator, setDropIndicator] = useState(null)
@@ -34,6 +45,14 @@ export default function SiloColumn({
   }, [])
 
   function handleColumnDragOver(e) {
+    if (isSiloReorderDrag(e)) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      const rect = e.currentTarget.getBoundingClientRect()
+      const before = e.clientX < rect.left + rect.width / 2
+      onSiloReorderDragOver?.(silo.id, before)
+      return
+    }
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     setDragOver(true)
@@ -47,6 +66,17 @@ export default function SiloColumn({
 
   /** Drop on column chrome (not on a card): move / append to this silo. */
   function handleColumnDrop(e) {
+    if (isSiloReorderDrag(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      setDragOver(false)
+      const dragId = e.dataTransfer.getData(SILO_REORDER_MIME)
+      if (!dragId) return
+      const rect = e.currentTarget.getBoundingClientRect()
+      const before = e.clientX < rect.left + rect.width / 2
+      onSiloReorderDrop?.(dragId, silo.id, before)
+      return
+    }
     e.preventDefault()
     setDragOver(false)
     if (e.target.closest?.('.project-card')) return
@@ -98,7 +128,16 @@ export default function SiloColumn({
 
   return (
     <div
-      className={`silo-column ${dragOver ? 'silo-column--drag-over' : ''}`}
+      className={[
+        'silo-column',
+        dragOver ? 'silo-column--drag-over' : '',
+        siloDragging ? 'silo-column--silo-dragging' : '',
+        siloReorderSlot === 'before' ? 'silo-column--drop-before' : '',
+        siloReorderSlot === 'after' ? 'silo-column--drop-after' : '',
+        siloReordering ? 'silo-column--reordering' : '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
       data-silo-accent={accentColor ? 'true' : undefined}
       style={accentColor ? { '--silo-accent': accentColor } : undefined}
       onDragOver={handleColumnDragOver}
@@ -106,6 +145,20 @@ export default function SiloColumn({
       onDrop={handleColumnDrop}
     >
       <div className="silo-header">
+        <span
+          className="list-drag-handle silo-drag-handle"
+          draggable={!siloReordering}
+          onDragStart={(e) => {
+            e.stopPropagation()
+            e.dataTransfer.setData(SILO_REORDER_MIME, silo.id)
+            e.dataTransfer.effectAllowed = 'move'
+            onSiloReorderDragStart?.(silo.id)
+          }}
+          aria-label={`Drag to reorder ${displayTitle ?? silo.title}`}
+          title="Drag to reorder list"
+        >
+          ⋮⋮
+        </span>
         <SiloTitle
           defaultTitle={silo.title}
           displayTitle={displayTitle ?? silo.title}

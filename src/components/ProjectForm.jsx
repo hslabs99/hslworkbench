@@ -3,8 +3,11 @@ import MailFolderPickerModal from './MailFolderPickerModal.jsx'
 import MainContactFieldMenu from './MainContactFieldMenu.jsx'
 import { useHarvestExclusions } from './HarvestExclusionsSection.jsx'
 import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
-import { harvestClientEmailsFromFolder, projectClientMailFolder } from '../graphMail.js'
+import { projectClientMailFolder } from '../graphMail.js'
 import { clientMailRootLabel } from '../mailFolderConfig.js'
+import { harvestClientEmailsForProject } from '../projectHarvest.js'
+import { isProspectLeadProject } from '../unassignedQueue.js'
+import { normalizeAttention } from '../attention.js'
 
 function buildEmpty() {
   return {
@@ -47,7 +50,7 @@ function projectToFormState(p) {
     nextActionSummary: p.nextActionSummary ?? '',
     siloId: p.siloId ?? 'active',
     latestStatusSummary: p.latestStatusSummary ?? '',
-    attention: p.attention ?? 'green',
+    attention: normalizeAttention(p.attention ?? 'green'),
   }
 }
 
@@ -130,7 +133,27 @@ export default function ProjectForm({
   }, [mode, initialProject])
 
   async function applyHarvestResult(result, { fillPrimary = true, force = false } = {}) {
-    const parts = [`Scanned ${result.messagesScanned} message${result.messagesScanned === 1 ? '' : 's'}`]
+    if (result.source === 'stored_summaries' && result.messagesMatched === 0) {
+      setHarvestError('No stored emails for this card — run Communication Summary scan first.')
+      return
+    }
+    if (result.contactFilterApplied && result.messagesMatched === 0) {
+      setHarvestError('No messages found for this prospect in the folder.')
+      setHarvestMessage(
+        `Scanned ${result.messagesScanned} message${result.messagesScanned === 1 ? '' : 's'} in the folder.`,
+      )
+      return
+    }
+
+    const parts =
+      result.source === 'stored_summaries'
+        ? [
+            `Used ${result.messagesMatched} stored email${result.messagesMatched === 1 ? '' : 's'} for this card`,
+          ]
+        : [`Scanned ${result.messagesScanned} message${result.messagesScanned === 1 ? '' : 's'}`]
+    if (result.contactFilterApplied && result.messagesMatched < result.messagesScanned) {
+      parts.push(`${result.messagesMatched} for this prospect`)
+    }
     if (result.primary?.email && fillPrimary) {
       setValues((v) => ({
         ...v,
@@ -150,10 +173,20 @@ export default function ProjectForm({
     setHarvestMessage(parts.join(' — '))
   }
 
-  async function runHarvest(folder, { fillPrimary = true, force = false } = {}) {
-    if (!folder?.id) return
-    if (!configured || !account) {
+  async function runHarvest(
+    folder,
+    { fillPrimary = true, force = false, primaryEmail = '' } = {},
+  ) {
+    const isProspect =
+      mode === 'edit' && initialProject && isProspectLeadProject(initialProject)
+
+    if (!isProspect && !folder?.id) return
+    if (!isProspect && (!configured || !account)) {
       setHarvestError('Connect Microsoft email in Settings before harvesting.')
+      return
+    }
+    if (isProspect && mode !== 'edit') {
+      setHarvestError('Save the card before harvesting from stored emails.')
       return
     }
 
@@ -162,8 +195,8 @@ export default function ProjectForm({
     setHarvestMessage(null)
 
     try {
-      const token = await getAccessToken()
-      if (!token) throw new Error('Microsoft sign-in required.')
+      const token = !isProspect ? await getAccessToken() : null
+      if (!isProspect && !token) throw new Error('Microsoft sign-in required.')
 
       const existingContacts = [
         {
@@ -174,11 +207,20 @@ export default function ProjectForm({
         },
       ]
 
-      const result = await harvestClientEmailsFromFolder(
+      const harvestProject =
+        mode === 'edit' && initialProject
+          ? { ...initialProject, clientMailFolder: folder || initialProject.clientMailFolder }
+          : { clientMailFolder: folder }
+
+      const result = await harvestClientEmailsForProject(
         token,
-        folder.id,
+        harvestProject,
         existingContacts,
-        { mailboxEmail: userEmail, globalExcludeEmails: harvestExclusions },
+        {
+          mailboxEmail: userEmail,
+          globalExcludeEmails: harvestExclusions,
+          primaryEmail: force ? primaryEmail || values.mainContactEmail.trim() : '',
+        },
       )
 
       await applyHarvestResult(result, { fillPrimary, force })
@@ -190,12 +232,22 @@ export default function ProjectForm({
   }
 
   async function handleHarvestMainContact() {
-    if (!clientMailFolder?.id) {
+    const isProspect =
+      mode === 'edit' && initialProject && isProspectLeadProject(initialProject)
+
+    if (!isProspect && !clientMailFolder?.id) {
       setHarvestError('Choose a client mail folder first.')
       setHarvestMessage(null)
       return
     }
-    await runHarvest(clientMailFolder, { fillPrimary: true, force: true })
+
+    const primaryEmail =
+      values.mainContactEmail.trim() ||
+      (mode === 'edit' && initialProject?.prospectEmail) ||
+      (mode === 'edit' && initialProject?.clientContacts?.[0]?.email) ||
+      ''
+
+    await runHarvest(clientMailFolder, { fillPrimary: true, force: true, primaryEmail })
   }
 
   async function handleFolderSelect(folder) {
@@ -501,7 +553,13 @@ export default function ProjectForm({
             <MainContactFieldMenu
               onHarvest={handleHarvestMainContact}
               disabled={harvesting}
-              harvestDisabled={harvesting || !clientMailFolder?.id || !account}
+              harvestDisabled={
+                mode === 'edit' &&
+                initialProject &&
+                isProspectLeadProject(initialProject)
+                  ? harvesting || !initialProject.id
+                  : harvesting || !clientMailFolder?.id || !account
+              }
             />
           </legend>
           <div className="main-contact-fields">
@@ -524,12 +582,23 @@ export default function ProjectForm({
               Connect Microsoft email in Settings to harvest from the client mail folder.
             </p>
           )}
-          {account && !clientMailFolder && (
+          {account && !clientMailFolder && !(
+            mode === 'edit' && initialProject && isProspectLeadProject(initialProject)
+          ) && (
             <p className="muted main-contact-hint">
               Assign a client mail folder above, then use Harvest to fill name and email from its
               messages.
             </p>
           )}
+          {account &&
+            mode === 'edit' &&
+            initialProject &&
+            isProspectLeadProject(initialProject) && (
+              <p className="muted main-contact-hint">
+                Use Harvest to fill the main contact from this card&apos;s stored Communication
+                Summary emails.
+              </p>
+            )}
           {harvestError && <p className="form-error">{harvestError}</p>}
           {harvestMessage && <p className="muted project-form-harvest-result">{harvestMessage}</p>}
         </fieldset>
@@ -568,8 +637,9 @@ export default function ProjectForm({
         <label>
           Attention (traffic light)
           <select name="attention" value={values.attention || 'green'} onChange={handleChange}>
+            <option value="clear">Clear — no flag</option>
             <option value="green">Green — steady</option>
-            <option value="orange">Orange — needs attention</option>
+            <option value="orange">Yellow — needs attention</option>
             <option value="red">Red — urgent</option>
           </select>
         </label>

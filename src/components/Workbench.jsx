@@ -7,6 +7,7 @@ import {
   deleteBoardSilo,
   findSilo,
   normalizeProjectSiloId,
+  reorderBoardSilos,
   resolveSiloTitle as resolveBoardSiloTitle,
   siloArchivesOnEntry,
   updateBoardSiloTitle,
@@ -37,6 +38,7 @@ import { recordProjectSiloChange } from '../projectHistory.js'
 import { recordProjectClientMailScan } from '../projectMailScan.js'
 import { runColumnCommunicationScan } from '../columnScan.js'
 import { partitionScannableProjects } from '../projectCommunicationScan.js'
+import { reorderListItems } from '../listReorder.js'
 import { buildScanAllStageOptions, runScanAll } from '../scanAll.js'
 import { normalizeScanDays } from '../unassignedQueue.js'
 import { fetchAiConfig } from '../openaiCommunicationSummary.js'
@@ -105,6 +107,9 @@ export default function Workbench() {
   const scanAllCancelRef = useRef(false)
   const [deleteSiloId, setDeleteSiloId] = useState(null)
   const [deleteSiloBusy, setDeleteSiloBusy] = useState(false)
+  const [siloDropIndicator, setSiloDropIndicator] = useState(null)
+  const [draggingSiloId, setDraggingSiloId] = useState(null)
+  const [siloReordering, setSiloReordering] = useState(false)
   const { items: techStackOptions, loading: techStackLookupLoading } = useTechStackLookup()
   const { items: sectorOptions, loading: sectorLookupLoading } = useSectorLookup()
   const { promptOverrides } = useAiPromptSettings()
@@ -152,6 +157,15 @@ export default function Workbench() {
   useEffect(() => {
     saveSiloTitles(siloTitles)
   }, [siloTitles])
+
+  useEffect(() => {
+    function clearSiloReorderDrag() {
+      setSiloDropIndicator(null)
+      setDraggingSiloId(null)
+    }
+    document.addEventListener('dragend', clearSiloReorderDrag)
+    return () => document.removeEventListener('dragend', clearSiloReorderDrag)
+  }, [])
 
   useEffect(() => {
     saveDetailPanelOpen(detailPanelOpen)
@@ -387,6 +401,22 @@ export default function Workbench() {
     const fromId = current ? normalizeProjectSiloId(current, silos) : normalizeProjectSiloId({}, silos)
     if (current && fromId === newSiloId) return
     await placeProject(projectId, newSiloId, null, false)
+  }
+
+  async function handleSiloReorder(dragId, targetId, insertBefore) {
+    const reordered = reorderListItems(silos, dragId, targetId, insertBefore)
+    const prev = silos.map((s) => s.id).join(',')
+    const next = reordered.map((s) => s.id).join(',')
+    if (prev === next) return
+
+    setSiloReordering(true)
+    try {
+      await reorderBoardSilos(reordered)
+    } finally {
+      setSiloReordering(false)
+      setSiloDropIndicator(null)
+      setDraggingSiloId(null)
+    }
   }
 
   async function cycleProjectAttention(projectId) {
@@ -733,6 +763,20 @@ export default function Workbench() {
                 onScanColumn={handleOpenColumnScan}
                 onDeleteSilo={handleDeleteSiloRequest}
                 canDeleteList={canDeleteList}
+                siloDragging={draggingSiloId === silo.id}
+                siloReordering={siloReordering}
+                siloReorderSlot={
+                  siloDropIndicator?.targetId === silo.id
+                    ? siloDropIndicator.before
+                      ? 'before'
+                      : 'after'
+                    : null
+                }
+                onSiloReorderDragStart={setDraggingSiloId}
+                onSiloReorderDragOver={(targetId, before) =>
+                  setSiloDropIndicator({ targetId, before })
+                }
+                onSiloReorderDrop={handleSiloReorder}
               />
             ))}
             <AddSiloColumn onAdd={handleAddSilo} disabled={silosLoading} />

@@ -4,8 +4,9 @@ import { useAttentionLights } from '../AttentionLightsContext.jsx'
 
 const LABELS = {
   green: 'Green',
-  orange: 'Orange',
+  orange: 'Yellow',
   red: 'Red',
+  clear: 'Clear',
 }
 
 export default function LightsSettingsSection() {

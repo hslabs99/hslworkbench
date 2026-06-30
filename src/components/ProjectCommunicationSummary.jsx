@@ -13,7 +13,8 @@ import {
 import {
   fetchAiConfig,
 } from '../openaiCommunicationSummary.js'
-import { projectClientMailFolder, projectContactEmails } from '../graphMail.js'
+import { fetchMessageBodyText, projectClientMailFolder, projectContactEmails } from '../graphMail.js'
+import EmailBodyModal from './EmailBodyModal.jsx'
 import { scanProjectCommunications } from '../projectCommunicationScan.js'
 import { isExcludedHarvestEmail } from '../harvestExclusionsCleanup.js'
 import { useHarvestExclusions } from './HarvestExclusionsSection.jsx'
@@ -38,6 +39,7 @@ export default function ProjectCommunicationSummary({ project, onRecordClientMai
   const [error, setError] = useState(null)
   const [lastRun, setLastRun] = useState(null)
   const [reanalyseConfirmOpen, setReanalyseConfirmOpen] = useState(false)
+  const [emailView, setEmailView] = useState(null)
   const locationSyncInFlightRef = useRef(false)
   const mountRescoreDoneRef = useRef(null)
 
@@ -264,6 +266,43 @@ export default function ProjectCommunicationSummary({ project, onRecordClientMai
     runSummarise({ forceReanalyse: true })
   }, [runSummarise])
 
+  const openEmailView = useCallback(
+    async (row) => {
+      const messageId = row.messageId || row.id
+      if (!messageId) return
+
+      setEmailView({
+        row,
+        messageId,
+        bodyText: row.bodyPreview || '',
+        loading: true,
+        error: null,
+      })
+
+      try {
+        const token = await getAccessToken()
+        if (!token) throw new Error('Not signed in to Microsoft.')
+        const bodyText = await fetchMessageBodyText(token, messageId)
+        setEmailView((prev) =>
+          prev?.messageId === messageId ? { ...prev, bodyText, loading: false } : prev,
+        )
+      } catch (err) {
+        setEmailView((prev) =>
+          prev?.messageId === messageId
+            ? {
+                ...prev,
+                loading: false,
+                error: err instanceof Error ? err.message : String(err),
+              }
+            : prev,
+        )
+      }
+    },
+    [getAccessToken],
+  )
+
+  const closeEmailView = useCallback(() => setEmailView(null), [])
+
   if (!configured) {
     return <p className="muted">Microsoft email is not configured. Check Settings.</p>
   }
@@ -443,20 +482,26 @@ export default function ProjectCommunicationSummary({ project, onRecordClientMai
                       <CommTypeBadge type={row.type} />
                     </td>
                     <td className="comm-summary-subject">
-                      {row.webLink ? (
-                        <a
-                          href={row.webLink}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Open in Outlook"
-                        >
-                          {row.subject}
-                        </a>
-                      ) : (
-                        row.subject
-                      )}
+                      <button
+                        type="button"
+                        className="comm-summary-subject-btn"
+                        onClick={() => openEmailView(row)}
+                        title="Read full email text"
+                      >
+                        {row.subject}
+                      </button>
                     </td>
-                    <td className="comm-summary-summary">{row.summary}</td>
+                    <td className="comm-summary-summary">
+                      <span className="comm-summary-summary-text">{row.summary}</span>
+                      <button
+                        type="button"
+                        className="comm-summary-read-btn"
+                        onClick={() => openEmailView(row)}
+                        title="Read full email text"
+                      >
+                        Read email
+                      </button>
+                    </td>
                     <td className="comm-summary-col-attach">
                       {hasAttach ? (
                         <span
@@ -475,6 +520,15 @@ export default function ProjectCommunicationSummary({ project, onRecordClientMai
           </table>
         </div>
       )}
+
+      <EmailBodyModal
+        open={Boolean(emailView)}
+        row={emailView?.row}
+        bodyText={emailView?.bodyText}
+        loading={emailView?.loading}
+        error={emailView?.error}
+        onClose={closeEmailView}
+      />
 
       <ConfirmModal
         open={reanalyseConfirmOpen}

@@ -16,6 +16,9 @@ import { isUnassignedSiloId, UNASSIGNED_SILO } from './unassignedQueue.js'
 
 export const COLLECTION = 'boardSilos'
 
+/** MIME type for silo column reorder drags (distinct from project card drags). */
+export const SILO_REORDER_MIME = 'application/x-hsl-silo-id'
+
 /** Default columns seeded when boardSilos is empty (matches original hardcoded board). */
 export const DEFAULT_BOARD_SILOS = [
   { id: 'waiting-client', title: 'Waiting on Client', sortOrder: 0, archiveOnEntry: false },
@@ -108,6 +111,23 @@ export async function updateBoardSiloTitle(siloId, title) {
       title: trimmed,
       updatedAt: serverTimestamp(),
     })
+  } catch (err) {
+    throw asFirestoreError(err)
+  }
+}
+
+/** Persist new left-to-right order for board lists. */
+export async function reorderBoardSilos(orderedSilos) {
+  if (!orderedSilos?.length) return
+  try {
+    const batch = writeBatch(db)
+    orderedSilos.forEach((silo, index) => {
+      batch.update(doc(db, COLLECTION, silo.id), {
+        sortOrder: index * 1000,
+        updatedAt: serverTimestamp(),
+      })
+    })
+    await batch.commit()
   } catch (err) {
     throw asFirestoreError(err)
   }

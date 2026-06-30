@@ -11,6 +11,8 @@ import {
 } from 'firebase/firestore'
 import { db } from './firebase.js'
 import { parseEmailAddress } from './emailAddress.js'
+import { mergeHarvestedClientContacts } from './graphMail.js'
+import { isExcludedHarvestEmail } from './harvestExclusionsCleanup.js'
 
 const COLLECTION = 'email_summaries'
 
@@ -261,4 +263,119 @@ export async function saveEmailSummaries(projectId, rows) {
     batch.set(ref, rowToFirestorePayload(projectId, row), { merge: true })
   }
   await batch.commit()
+}
+
+/** One-time fetch of stored summary rows for a project. */
+export async function getProjectSummaryRows(projectId) {
+  if (!projectId) return []
+  const q = query(collection(db, COLLECTION), where('projectId', '==', projectId))
+  const snap = await getDocs(q)
+  return sortSummaryRows(snap.docs.map((d) => docToRow(d.id, d.data())))
+}
+
+function parseAddressListField(field) {
+  if (!field || field === '—') return []
+  return field
+    .split(',')
+    .map((part) => parseEmailAddress(part.trim()))
+    .filter(Boolean)
+}
+
+function addressesFromSummaryRow(row) {
+  const addrs = new Set()
+  const from = parseEmailAddress(row.from)
+  if (from) addrs.add(from)
+  for (const field of [row.to, row.cc, row.bcc]) {
+    for (const email of parseAddressListField(field)) {
+      addrs.add(email)
+    }
+  }
+  return [...addrs]
+}
+
+function buildExcludeSet({ mailboxEmail = '', globalExcludeEmails = [] } = {}) {
+  return new Set(
+    [mailboxEmail, ...(globalExcludeEmails || [])].map(parseEmailAddress).filter(Boolean),
+  )
+}
+
+function isHarvestExcluded(email, exclude, globalExcludeEmails) {
+  const key = parseEmailAddress(email)
+  if (!key || exclude.has(key)) return true
+  return isExcludedHarvestEmail(key, globalExcludeEmails)
+}
+
+function pickPrimaryFromSummaryRows(rows, { exclude, globalExcludeEmails, primaryEmail = '' } = {}) {
+  const primaryKey = parseEmailAddress(primaryEmail)
+  if (primaryKey && !isHarvestExcluded(primaryKey, exclude, globalExcludeEmails)) {
+    return { email: primaryKey, name: '' }
+  }
+
+  const fromCounts = new Map()
+  for (const row of rows) {
+    if (row.direction === 'outbound') continue
+    const from = parseEmailAddress(row.from)
+    if (!from || isHarvestExcluded(from, exclude, globalExcludeEmails)) continue
+    fromCounts.set(from, (fromCounts.get(from) || 0) + 1)
+  }
+
+  let best = null
+  for (const [email, count] of fromCounts) {
+    if (!best || count > best.count || (count === best.count && email.localeCompare(best.email) < 0)) {
+      best = { email, count }
+    }
+  }
+  if (!best) return null
+  return { email: best.email, name: '' }
+}
+
+/** Harvest contacts from Communication Summary rows already stored for this card. */
+export function harvestContactsFromSummaryRows(
+  rows,
+  existingContacts,
+  { mailboxEmail = '', globalExcludeEmails = [], primaryEmail = '' } = {},
+) {
+  const exclude = buildExcludeSet({ mailboxEmail, globalExcludeEmails })
+  for (const c of existingContacts || []) {
+    const key = parseEmailAddress(c.email)
+    if (key) exclude.add(key)
+  }
+
+  const byEmail = new Map()
+  for (const row of rows || []) {
+    for (const email of addressesFromSummaryRow(row)) {
+      if (isHarvestExcluded(email, exclude, globalExcludeEmails)) continue
+      if (!byEmail.has(email)) {
+        byEmail.set(email, { email, name: '' })
+      }
+    }
+  }
+
+  const harvested = [...byEmail.values()].sort((a, b) => a.email.localeCompare(b.email))
+  const { merged, added } = mergeHarvestedClientContacts(existingContacts, harvested)
+  const primary = pickPrimaryFromSummaryRows(rows, {
+    exclude: buildExcludeSet({ mailboxEmail, globalExcludeEmails }),
+    globalExcludeEmails,
+    primaryEmail,
+  })
+
+  return {
+    merged,
+    added,
+    messagesScanned: (rows || []).length,
+    messagesMatched: (rows || []).length,
+    contactFilterApplied: true,
+    source: 'stored_summaries',
+    primary,
+    harvested,
+  }
+}
+
+export async function harvestContactsFromStoredSummaries(
+  projectId,
+  existingContacts,
+  options = {},
+) {
+  const rows = await getProjectSummaryRows(projectId)
+  return harvestContactsFromSummaryRows(rows, existingContacts, options)
 }

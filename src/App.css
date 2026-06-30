@@ -606,6 +606,31 @@ body {
   box-shadow: inset 0 0 0 2px rgba(12, 102, 228, 0.2);
 }
 
+.silo-column--silo-dragging {
+  opacity: 0.55;
+}
+
+.silo-column--drop-before {
+  box-shadow: inset 3px 0 0 0 var(--primary);
+}
+
+.silo-column--drop-after {
+  box-shadow: inset -3px 0 0 0 var(--primary);
+}
+
+.silo-column--reordering {
+  pointer-events: none;
+}
+
+.silo-drag-handle {
+  flex-shrink: 0;
+}
+
+.silo-header .silo-title-frame {
+  flex: 1;
+  min-width: 0;
+}
+
 @media (max-width: 960px) {
   .silo-column {
     max-height: 55vh;
@@ -906,6 +931,14 @@ body {
   box-shadow: 0 0 0 1px var(--danger), 0 2px 8px rgba(201, 55, 44, 0.2);
 }
 
+.project-card--needs-folder {
+  border-color: #4b5563;
+}
+
+.project-card--needs-folder.project-card--selected {
+  border-color: var(--danger);
+}
+
 .project-card--drop-slot-before {
   box-shadow: inset 0 3px 0 0 var(--primary);
 }
@@ -949,6 +982,12 @@ body {
 
 .attention-light--dynamic {
   /* background / border from Settings → Lights (inline styles) */
+}
+
+.attention-light--clear {
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.8),
+    0 1px 2px rgba(9, 45, 66, 0.12);
 }
 
 .attention-light:hover {
@@ -1579,14 +1618,45 @@ body {
   line-height: 1;
 }
 
-.comm-summary-subject a {
+.comm-summary-subject-btn {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
   color: var(--primary, #0c66e4);
+  font: inherit;
   font-weight: 600;
-  text-decoration: none;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.comm-summary-subject a:hover {
+.comm-summary-subject-btn:hover {
   text-decoration: underline;
+}
+
+.comm-summary-read-btn {
+  display: inline-block;
+  margin-top: 0.35rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary, #0c66e4);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.comm-summary-read-btn:hover {
+  color: var(--text);
+}
+
+.comm-summary-summary-text {
+  display: block;
 }
 
 .comm-summary-table th,
@@ -1685,6 +1755,14 @@ body {
   padding: 0.1rem 0.35rem;
 }
 
+.comm-type-badge--card.comm-type-badge--request {
+  background: #dc2626;
+  color: #ffffff;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 .comm-summary-attachments {
   min-width: 6rem;
   font-size: 0.78rem;
@@ -1695,6 +1773,99 @@ body {
   font-size: 0.75rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+
+.email-body-modal {
+  max-width: 720px;
+  padding: 1.25rem 1.5rem 1.5rem;
+  max-height: min(85vh, 720px);
+  display: flex;
+  flex-direction: column;
+}
+
+.email-body-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.email-body-modal-title {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.35;
+  flex: 1;
+}
+
+.email-body-modal-meta {
+  display: grid;
+  gap: 0.35rem 1rem;
+  margin: 0 0 0.85rem;
+  font-size: 0.8rem;
+}
+
+.email-body-modal-meta div {
+  display: grid;
+  grid-template-columns: 3rem 1fr;
+  gap: 0.5rem;
+}
+
+.email-body-modal-meta dt {
+  margin: 0;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.email-body-modal-meta dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.email-body-modal-body-wrap {
+  flex: 1;
+  min-height: 8rem;
+  overflow: auto;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 6px;
+  background: #fafbfc;
+  padding: 0.75rem 0.85rem;
+}
+
+.email-body-modal-loading {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+}
+
+.email-body-modal-error {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+}
+
+.email-body-modal-text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.email-body-modal-footer {
+  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border, #eee);
+  font-size: 0.8rem;
+}
+
+.email-body-modal-footer a {
+  color: var(--primary, #0c66e4);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.email-body-modal-footer a:hover {
+  text-decoration: underline;
 }
 
 .detail-tab {

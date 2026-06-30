@@ -19,6 +19,7 @@ import {
   UNASSIGNED_SILO,
   UNASSIGNED_SILO_ID,
 } from './unassignedQueue.js'
+import { projectNeedsClientFolder } from './graphMail.js'
 import { scanProjectCommunications } from './projectCommunicationScan.js'
 
 function throwIfCancelled(isCancelled) {
@@ -98,48 +99,89 @@ export async function discoverLeadQueueProspects(accessToken, {
   return [...byEmail.values()].sort((a, b) => a.email.localeCompare(b.email))
 }
 
+async function buildProspectProjectPatch(
+  prospect,
+  existing,
+  leadQueueFolder,
+  { promptOverrides, refreshGenericName = false },
+) {
+  const email = normalizeEmailAddress(prospect.email)
+  const contactName = prospect.name || ''
+  const patch = {}
+
+  if (
+    leadQueueFolder?.id &&
+    projectNeedsClientFolder(existing) &&
+    existing.clientMailFolder?.id !== leadQueueFolder.id
+  ) {
+    patch.clientMailFolder = leadQueueFolder
+  }
+
+  const resolvedContactName = contactName || existing.clientContacts?.[0]?.name || ''
+  if (resolvedContactName && resolvedContactName !== existing.clientContacts?.[0]?.name) {
+    patch.clientContacts = [{ name: resolvedContactName, email, role: '', phone: '' }]
+  }
+
+  const shouldName =
+    refreshGenericName ||
+    isGenericProspectProjectName(existing.projectName, email, resolvedContactName)
+  if (shouldName && (prospect.leadSubject || prospect.leadBody)) {
+    const named = await resolveProspectProjectName(prospect, { promptOverrides })
+    if (
+      named.projectName &&
+      !isGenericProspectProjectName(named.projectName, email, resolvedContactName)
+    ) {
+      patch.projectName = named.projectName
+      if (named.description && !existing.description) {
+        patch.description = named.description
+      }
+    }
+  }
+
+  return patch
+}
+
 export async function ensureProspectProject(
   prospect,
   leadQueueFolder,
-  { unassignedByEmail, assignedEmails, promptOverrides, refreshGenericName = false },
+  { unassignedByEmail, assignedEmails, projectByEmail, promptOverrides, refreshGenericName = false },
 ) {
   const email = normalizeEmailAddress(prospect.email)
   if (!email) {
     return { project: null, created: false, skipped: true, reason: 'no_email' }
   }
+
   if (assignedEmails.has(email)) {
-    return { project: null, created: false, skipped: true, reason: 'already_assigned' }
+    const existing = projectByEmail?.get(email)
+    if (!existing) {
+      return { project: null, created: false, skipped: true, reason: 'already_assigned' }
+    }
+
+    const patch = await buildProspectProjectPatch(prospect, existing, leadQueueFolder, {
+      promptOverrides,
+      refreshGenericName,
+    })
+
+    if (Object.keys(patch).length) {
+      await updateDoc(doc(db, 'projects', existing.id), {
+        ...patch,
+        updatedAt: serverTimestamp(),
+      })
+      const updated = { ...existing, ...patch }
+      projectByEmail?.set(email, updated)
+      return { project: updated, created: false, skipped: false, reason: 'already_assigned' }
+    }
+
+    return { project: existing, created: false, skipped: false, reason: 'already_assigned' }
   }
 
   const contactName = prospect.name || ''
   const existing = unassignedByEmail.get(email)
   if (existing) {
-    const patch = {}
-    if (leadQueueFolder?.id && existing.clientMailFolder?.id !== leadQueueFolder.id) {
-      patch.clientMailFolder = leadQueueFolder
-    }
-    const resolvedContactName = contactName || existing.clientContacts?.[0]?.name || ''
-    if (resolvedContactName && resolvedContactName !== existing.clientContacts?.[0]?.name) {
-      patch.clientContacts = [
-        { name: resolvedContactName, email, role: '', phone: '' },
-      ]
-    }
-
-    const shouldName =
-      refreshGenericName ||
-      isGenericProspectProjectName(existing.projectName, email, resolvedContactName)
-    if (shouldName && (prospect.leadSubject || prospect.leadBody)) {
-      const named = await resolveProspectProjectName(prospect, { promptOverrides })
-      if (
-        named.projectName &&
-        !isGenericProspectProjectName(named.projectName, email, resolvedContactName)
-      ) {
-        patch.projectName = named.projectName
-        if (named.description && !existing.description) {
-          patch.description = named.description
-        }
-      }
-    }
+    const patch = await buildProspectProjectPatch(prospect, existing, leadQueueFolder, {
+      promptOverrides,
+      refreshGenericName,
+    })
 
     if (Object.keys(patch).length) {
       await updateDoc(doc(db, 'projects', existing.id), {
@@ -148,9 +190,16 @@ export async function ensureProspectProject(
       })
       const updated = { ...existing, ...patch }
       unassignedByEmail.set(email, updated)
+      projectByEmail?.set(email, updated)
       return { project: updated, created: false, skipped: false }
     }
     return { project: existing, created: false, skipped: false }
+  }
+
+  // Another card may already own this email outside the unassigned map.
+  const owned = projectByEmail?.get(email)
+  if (owned) {
+    return { project: owned, created: false, skipped: false, reason: 'already_assigned' }
   }
 
   const named = await resolveProspectProjectName(prospect, { promptOverrides })
@@ -170,7 +219,7 @@ export async function ensureProspectProject(
     visibleOnWorkbench: true,
     techStack: [],
     sectors: [],
-    attention: 'none',
+    attention: 'clear',
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }
@@ -178,6 +227,7 @@ export async function ensureProspectProject(
   const ref = await addDoc(collection(db, 'projects'), docData)
   const project = { id: ref.id, ...docData }
   unassignedByEmail.set(email, project)
+  projectByEmail?.set(email, project)
   return { project, created: true, skipped: false }
 }
 
@@ -241,7 +291,8 @@ export async function runUnassignedQueueScan({
   })
   summary.prospectsFound = prospects.length
 
-  const { unassignedByEmail, assignedEmails } = indexProjectsByProspectEmail(existingProjects)
+  const { unassignedByEmail, assignedEmails, projectByEmail } =
+    indexProjectsByProspectEmail(existingProjects)
   const projectsToScan = []
   const scanIds = new Set()
 
@@ -264,15 +315,17 @@ export async function runUnassignedQueueScan({
     const result = await ensureProspectProject(prospect, prospectFolder, {
       unassignedByEmail,
       assignedEmails,
+      projectByEmail,
       promptOverrides,
       refreshGenericName: forceReanalyse,
     })
-    if (result.skipped && result.reason === 'already_assigned') {
-      summary.cardsSkippedAssigned += 1
+    if (result.skipped && !result.project) {
+      if (result.reason === 'already_assigned') summary.cardsSkippedAssigned += 1
       continue
     }
     if (result.project) {
-      if (result.created) summary.cardsCreated += 1
+      if (result.reason === 'already_assigned') summary.cardsSkippedAssigned += 1
+      else if (result.created) summary.cardsCreated += 1
       if (!scanIds.has(result.project.id)) {
         scanIds.add(result.project.id)
         projectsToScan.push(result.project)

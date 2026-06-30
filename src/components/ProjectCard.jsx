@@ -4,7 +4,8 @@ import { useAttentionLights } from '../AttentionLightsContext.jsx'
 
 import { useEmailSummaryLast } from '../EmailSummaryLastContext.jsx'
 import { daysSinceTimestamp, formatMailScanTooltip } from '../commSummaryFormat.js'
-import { attentionHoverTitle, normalizeAttention } from '../attention.js'
+import { attentionHoverTitle, attentionLabel, attentionLightStyle, normalizeAttention } from '../attention.js'
+import { projectNeedsClientFolder } from '../graphMail.js'
 
 import ProjectCardEmailLast from './ProjectCardEmailLast.jsx'
 
@@ -46,6 +47,7 @@ export default function ProjectCard({
   const { inbound: lastIn, outbound: lastOut } = useEmailSummaryLast(project.id)
   const folderScanDays = daysSinceTimestamp(project.lastClientMailScanAt)
   const folderScanTitle = formatMailScanTooltip(project.lastClientMailScanAt)
+  const needsClientFolder = projectNeedsClientFolder(project)
 
 
 
@@ -111,6 +113,8 @@ export default function ProjectCard({
 
         dropSlot === 'after' ? 'project-card--drop-slot-after' : '',
 
+        needsClientFolder ? 'project-card--needs-folder' : '',
+
       ]
 
         .filter(Boolean)
@@ -171,7 +175,11 @@ export default function ProjectCard({
 
       aria-pressed={selected}
 
-      title="Drag to reorder within the column or move to another column"
+      title={
+        needsClientFolder
+          ? 'No client folder assigned — drag to reorder within the column or move to another column'
+          : 'Drag to reorder within the column or move to another column'
+      }
 
     >
 
@@ -198,19 +206,19 @@ export default function ProjectCard({
 
               type="button"
 
-              className="attention-light attention-light--dynamic"
+              className={[
+                'attention-light',
+                'attention-light--dynamic',
+                attention === 'clear' ? 'attention-light--clear' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
 
-              style={{
-
-                background: attentionColors[attention],
-
-                borderColor: attentionColors[attention],
-
-              }}
+              style={attentionLightStyle(attention, attentionColors)}
 
               title={attentionHoverTitle(attention, attentionTooltips)}
 
-              aria-label={`Attention: ${attention}. Click to cycle green, orange, red.`}
+              aria-label={`Attention: ${attentionLabel(attention)}. Click to cycle green, yellow, red, clear.`}
 
               onMouseDown={(e) => e.stopPropagation()}
 

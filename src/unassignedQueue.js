@@ -84,30 +84,38 @@ export function prospectEmailFromProject(project) {
   return ''
 }
 
-/** Map prospect email → existing unassigned project; set of emails on assigned projects. */
+/** All sender emails used to match lead-queue mail to an existing card. */
+export function collectProjectProspectEmails(project) {
+  const emails = new Set()
+  const primary = prospectEmailFromProject(project)
+  if (primary) emails.add(primary)
+  for (const c of project?.clientContacts || []) {
+    const e = normalizeEmailAddress(c.email)
+    if (e) emails.add(e)
+  }
+  return [...emails]
+}
+
+/** Map prospect email → existing unassigned project; all projects by email; assigned set. */
 export function indexProjectsByProspectEmail(projects) {
   const unassignedByEmail = new Map()
-  const assignedEmails = new Set()
+  const projectByEmail = new Map()
 
   for (const p of projects || []) {
-    const emails = new Set()
-    const primary = prospectEmailFromProject(p)
-    if (primary) emails.add(primary)
-    for (const c of p.clientContacts || []) {
-      const e = normalizeEmailAddress(c.email)
-      if (e) emails.add(e)
-    }
-
-    for (const email of emails) {
-      if (isUnassignedSiloId(p.siloId)) {
-        if (!unassignedByEmail.has(email)) unassignedByEmail.set(email, p)
-      } else {
-        assignedEmails.add(email)
+    for (const email of collectProjectProspectEmails(p)) {
+      if (!projectByEmail.has(email)) projectByEmail.set(email, p)
+      if (isUnassignedSiloId(p.siloId) && !unassignedByEmail.has(email)) {
+        unassignedByEmail.set(email, p)
       }
     }
   }
 
-  return { unassignedByEmail, assignedEmails }
+  const assignedEmails = new Set()
+  for (const [email, p] of projectByEmail) {
+    if (!isUnassignedSiloId(p.siloId)) assignedEmails.add(email)
+  }
+
+  return { unassignedByEmail, assignedEmails, projectByEmail }
 }
 
 export function normalizeUnassignedQueueSettings(data = {}) {

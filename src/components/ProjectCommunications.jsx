@@ -5,11 +5,12 @@ import { useHarvestExclusions } from './HarvestExclusionsSection.jsx'
 import {
   fetchProjectMessages,
   formatMessageDate,
-  harvestClientEmailsFromFolder,
   projectClientMailFolder,
   projectClientContacts,
 } from '../graphMail.js'
 import { clientMailRootLabel } from '../mailFolderConfig.js'
+import { harvestClientEmailsForProject } from '../projectHarvest.js'
+import { isProspectLeadProject } from '../unassignedQueue.js'
 
 export default function ProjectCommunications({
   project,
@@ -53,24 +54,30 @@ export default function ProjectCommunications({
   }, [account, clientFolder, getAccessToken, onRecordClientMailScan, project.id])
 
   const harvest = useCallback(async () => {
-    if (!account || !clientFolder?.id || !onUpdateClientContacts) return
+    if (!onUpdateClientContacts) return
     setHarvesting(true)
     setError(null)
     setHarvestResult(null)
     try {
-      const token = await getAccessToken()
-      if (!token) return
-      const result = await harvestClientEmailsFromFolder(
+      const token = account ? await getAccessToken() : null
+      const result = await harvestClientEmailsForProject(
         token,
-        clientFolder.id,
+        project,
         clientContacts,
-        { mailboxEmail: userEmail, globalExcludeEmails: harvestExclusions },
+        {
+          mailboxEmail: userEmail,
+          globalExcludeEmails: harvestExclusions,
+        },
       )
+      if (result.source === 'stored_summaries' && result.messagesMatched === 0) {
+        setError('No stored emails for this card — run Communication Summary scan first.')
+        return
+      }
       if (result.added.length > 0) {
         await onUpdateClientContacts(project.id, result.merged)
       }
       setHarvestResult(result)
-      if (onRecordClientMailScan) {
+      if (onRecordClientMailScan && result.source !== 'stored_summaries') {
         await onRecordClientMailScan(project.id)
       }
     } catch (err) {
@@ -80,12 +87,11 @@ export default function ProjectCommunications({
     }
   }, [
     account,
-    clientFolder,
     clientContacts,
     getAccessToken,
     onUpdateClientContacts,
     onRecordClientMailScan,
-    project.id,
+    project,
     userEmail,
     harvestExclusions,
   ])
@@ -173,9 +179,11 @@ export default function ProjectCommunications({
           )}
         </div>
         <p className="muted project-comms-contacts-hint">
-          From, To, and Cc addresses found in the client folder are added here — used to match
-          inbound mail in the folder and sent items for summaries. Your mailbox and addresses in{' '}
-          <strong>Settings → Harvest email exclusions</strong> are always skipped.
+          {isProspectLeadProject(project)
+            ? 'Addresses from this card\u2019s stored Communication Summary emails are added here.'
+            : 'From, To, and Cc addresses found in the client folder are added here — used to match inbound mail in the folder and sent items for summaries.'}{' '}
+          Your mailbox and addresses in <strong>Settings → Harvest email exclusions</strong> are
+          always skipped.
         </p>
         {clientContacts.length === 0 ? (
           <p className="muted">No client emails yet. Harvest from the folder or add a main contact
@@ -194,10 +202,12 @@ export default function ProjectCommunications({
         )}
         {harvestResult && (
           <p className="project-comms-harvest-result">
-            Scanned {harvestResult.messagesScanned} message
-            {harvestResult.messagesScanned === 1 ? '' : 's'} —{' '}
+            {harvestResult.source === 'stored_summaries'
+              ? `Used ${harvestResult.messagesMatched} stored email${harvestResult.messagesMatched === 1 ? '' : 's'} for this card`
+              : `Scanned ${harvestResult.messagesScanned} message${harvestResult.messagesScanned === 1 ? '' : 's'}`}
+            {' — '}
             {harvestResult.added.length === 0
-              ? 'no new To/Cc addresses to add.'
+              ? 'no new addresses to add.'
               : `added ${harvestResult.added.length}: ${harvestResult.added.map((c) => c.email).join(', ')}`}
           </p>
         )}

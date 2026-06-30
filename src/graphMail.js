@@ -7,9 +7,12 @@ function normalizeEmail(email) {
   return parseEmailAddress(email)
 }
 
-async function graphGet(accessToken, url) {
+async function graphGet(accessToken, url, { headers: extraHeaders } = {}) {
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...extraHeaders,
+    },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -168,6 +171,18 @@ export function projectClientMailFolder(project) {
   }
 }
 
+/** True when the card has no dedicated client subfolder under DEV QUEUE (queue-only or unset). */
+export function projectNeedsClientFolder(project) {
+  const folder = project?.clientMailFolder
+  if (!folder?.id) return true
+  const path = (folder.path || folder.displayName || '').trim()
+  if (!path) return true
+  const segments = path.split(/[/\\]/).map((s) => s.trim()).filter(Boolean)
+  const queueIdx = segments.findIndex((s) => s.toLowerCase() === 'dev queue')
+  if (queueIdx === -1) return false
+  return queueIdx >= segments.length - 1
+}
+
 export function projectContactEmails(project) {
   const contacts = Array.isArray(project?.clientContacts) ? project.clientContacts : []
   const emails = contacts.map((c) => normalizeEmail(c.email)).filter(Boolean)
@@ -296,6 +311,29 @@ export function pickPrimaryContactFromFolderMessages(messages, { excludeEmails =
   return pickBest(fromCounts, fromNames) || pickBest(allCounts, allNames)
 }
 
+/** Best display name for a specific address from folder messages (prefers inbound sender name). */
+function pickNameForEmail(messages, email) {
+  const key = normalizeEmail(email)
+  if (!key) return null
+
+  for (const msg of messages) {
+    const from = senderAddressFromGraph(msg.from)
+    if (normalizeEmail(from) === key) {
+      return { email: key, name: (msg.from?.emailAddress?.name || '').trim() }
+    }
+  }
+
+  for (const msg of messages) {
+    for (const entry of recipientEntries(msg, ['toRecipients', 'ccRecipients'])) {
+      if (normalizeEmail(entry.email) === key) {
+        return { email: key, name: entry.name || '' }
+      }
+    }
+  }
+
+  return { email: key, name: '' }
+}
+
 /** Append harvested addresses to clientContacts without duplicating by email. */
 export function mergeHarvestedClientContacts(existingContacts, harvested) {
   const existing = Array.isArray(existingContacts) ? existingContacts : []
@@ -319,9 +357,25 @@ export async function harvestClientEmailsFromFolder(
   accessToken,
   folderId,
   existingContacts,
-  { mailboxEmail = '', globalExcludeEmails = [], maxMessages = 500 } = {},
+  {
+    mailboxEmail = '',
+    globalExcludeEmails = [],
+    maxMessages = 500,
+    /** When set, only messages involving these addresses are used (e.g. shared lead queue). */
+    filterContactEmails = [],
+    /** When set, primary contact is this address and its display name from matching mail. */
+    primaryEmail = '',
+  } = {},
 ) {
-  const messages = await fetchFolderMessages(accessToken, folderId, { maxMessages })
+  const allMessages = await fetchFolderMessages(accessToken, folderId, { maxMessages })
+  const contactFilter = [
+    ...new Set((filterContactEmails || []).map(normalizeEmail).filter(Boolean)),
+  ]
+  let messages = allMessages
+  if (contactFilter.length > 0) {
+    messages = allMessages.filter((msg) => messageMatchesContacts(msg, contactFilter))
+  }
+
   const existingEmails = (Array.isArray(existingContacts) ? existingContacts : []).map(
     (c) => c.email,
   )
@@ -332,8 +386,21 @@ export async function harvestClientEmailsFromFolder(
   ].filter(Boolean)
   const harvested = harvestToCcAddresses(messages, { excludeEmails })
   const { merged, added } = mergeHarvestedClientContacts(existingContacts, harvested)
-  const primary = pickPrimaryContactFromFolderMessages(messages, { excludeEmails })
-  return { merged, added, messagesScanned: messages.length, primary, harvested }
+
+  const primaryKey = normalizeEmail(primaryEmail)
+  const primary = primaryKey
+    ? pickNameForEmail(messages, primaryKey)
+    : pickPrimaryContactFromFolderMessages(messages, { excludeEmails })
+
+  return {
+    merged,
+    added,
+    messagesScanned: allMessages.length,
+    messagesMatched: messages.length,
+    contactFilterApplied: contactFilter.length > 0,
+    primary,
+    harvested,
+  }
 }
 
 function messageAddresses(message) {
@@ -352,9 +419,9 @@ function messageAddresses(message) {
 }
 
 function messageMatchesContacts(message, contactEmails) {
-  if (!contactEmails.length) return false
-  const addrs = messageAddresses(message)
-  return contactEmails.some((contact) => addrs.includes(contact))
+  const contactSet = new Set(contactEmails.map(normalizeEmail).filter(Boolean))
+  if (!contactSet.size) return false
+  return messageAddresses(message).some((addr) => contactSet.has(normalizeEmail(addr)))
 }
 
 /**
@@ -393,5 +460,62 @@ export function formatMessageDate(iso) {
     return new Date(iso).toLocaleString()
   } catch {
     return iso
+  }
+}
+
+function normalizePlainText(text) {
+  return String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function looksLikeHtml(text) {
+  return (
+    /<\/?[a-z][\s\S]*>/i.test(text) ||
+    /<!--[\s\S]*?-->/.test(text) ||
+    /@font-face/i.test(text)
+  )
+}
+
+function htmlToPlainText(html) {
+  const cleaned = String(html || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<head[\s\S]*?<\/head>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n')
+
+  const div = document.createElement('div')
+  div.innerHTML = cleaned
+  return normalizePlainText(div.textContent || div.innerText || '')
+}
+
+function bodyContentToPlainText(body) {
+  if (!body?.content) return ''
+  const content = body.content.trim()
+  if (body.contentType === 'text' && !looksLikeHtml(content)) {
+    return normalizePlainText(content)
+  }
+  return htmlToPlainText(content)
+}
+
+/** Fetch full message body as plain text (for in-app email preview). */
+export async function fetchMessageBodyText(accessToken, messageId) {
+  const url = `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=body`
+  try {
+    const data = await graphGet(accessToken, url, {
+      headers: { Prefer: 'outlook.body-content-type="text"' },
+    })
+    return bodyContentToPlainText(data.body)
+  } catch {
+    const data = await graphGet(accessToken, url)
+    return bodyContentToPlainText(data.body)
   }
 }
