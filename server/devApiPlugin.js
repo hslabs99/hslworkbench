@@ -31,9 +31,9 @@ export function devApiPlugin() {
     configureServer(server) {
       const env = loadEnv('', process.cwd(), '')
       for (const [key, value] of Object.entries(env)) {
-        if (key === 'OPENAI_API_KEY') continue
         process.env[key] = value
       }
+      // OPENAI_API_KEY in .env.local overrides Secret Manager for local dev (see .env.example).
 
       const secretsReady = ensureServerSecrets().catch((err) => {
         console.warn(

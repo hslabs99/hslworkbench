@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { loadSiloColors, saveSiloColors } from '../siloColorsStorage.js'
 import { loadSiloTitles, saveSiloTitles } from '../siloTitlesStorage.js'
 import { loadDetailPanelOpen, saveDetailPanelOpen } from '../detailPanelStorage.js'
@@ -263,6 +263,11 @@ export default function Workbench() {
   const selectedProject = selectedId
     ? projects.find((p) => p.id === selectedId) ?? null
     : null
+
+  const handleSelectCard = useCallback((id) => {
+    setSelectedId(id)
+    setDetailPanelOpen(true)
+  }, [])
 
   async function handleUpdateUnassignedQueueSettings(patch) {
     await updateUnassignedQueueSettings(patch)
@@ -730,7 +735,7 @@ export default function Workbench() {
               deepScan={deepScan}
               forceRescan={forceRescan}
               onUpdateQueueSettings={handleUpdateUnassignedQueueSettings}
-              onSelectCard={setSelectedId}
+              onSelectCard={handleSelectCard}
               selectedId={selectedId}
               onMoveCard={moveProject}
               onPlaceProject={placeProject}
@@ -748,7 +753,7 @@ export default function Workbench() {
                 key={silo.id}
                 silo={silo}
                 projects={bySilo[silo.id] || []}
-                onSelectCard={setSelectedId}
+                onSelectCard={handleSelectCard}
                 selectedId={selectedId}
                 onMoveCard={moveProject}
                 onPlaceProject={placeProject}

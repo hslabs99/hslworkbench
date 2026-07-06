@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useAttentionLights } from '../AttentionLightsContext.jsx'
 import { attentionHoverTitle, attentionLabel, attentionLightStyle, normalizeAttention } from '../attention.js'
 import { formatUsd } from '../formatMoney.js'
@@ -41,8 +41,12 @@ export default function ProjectDetailPanel({
   siloTitleOverrides = {},
 }) {
   const { colors: attentionColors, tooltips: attentionTooltips } = useAttentionLights()
-  const [detailTab, setDetailTab] = useState('details')
+  const [detailTab, setDetailTab] = useState('comm-summary')
   const [lookupsOpen, setLookupsOpen] = useState(false)
+
+  useEffect(() => {
+    if (project?.id) setDetailTab('comm-summary')
+  }, [project?.id])
 
   if (!project) {
     return (
