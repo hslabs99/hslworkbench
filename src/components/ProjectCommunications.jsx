@@ -9,8 +9,10 @@ import {
   projectClientContacts,
 } from '../graphMail.js'
 import { clientMailRootLabel } from '../mailFolderConfig.js'
+import { removeClientContactByEmail } from '../harvestExclusionsCleanup.js'
 import { harvestClientEmailsForProject } from '../projectHarvest.js'
 import { isProspectLeadProject } from '../unassignedQueue.js'
+import ConfirmModal from './ConfirmModal.jsx'
 
 export default function ProjectCommunications({
   project,
@@ -27,6 +29,8 @@ export default function ProjectCommunications({
   const [harvestResult, setHarvestResult] = useState(null)
   const [scannedAt, setScannedAt] = useState(null)
   const [folderPickerOpen, setFolderPickerOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   const clientFolder = useMemo(() => projectClientMailFolder(project), [project])
   const clientContacts = useMemo(() => projectClientContacts(project), [project])
@@ -106,6 +110,22 @@ export default function ProjectCommunications({
   async function handleFolderSelect(folder) {
     if (onUpdateClientMailFolder) {
       await onUpdateClientMailFolder(project.id, folder)
+    }
+  }
+
+  async function confirmRemoveContact() {
+    if (!deleteTarget || !onUpdateClientContacts) return
+    setDeleting(true)
+    setError(null)
+    try {
+      const updated = removeClientContactByEmail(clientContacts, deleteTarget.email)
+      await onUpdateClientContacts(project.id, updated)
+      setDeleteTarget(null)
+      setHarvestResult(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -192,9 +212,21 @@ export default function ProjectCommunications({
           <ul className="project-comms-contacts-list">
             {clientContacts.map((c, i) => (
               <li key={`${c.email}-${i}`} className="project-comms-contact">
-                <span className="project-comms-contact-email">{c.email || '—'}</span>
-                {c.name ? (
-                  <span className="muted project-comms-contact-name">{c.name}</span>
+                <div className="project-comms-contact-info">
+                  <span className="project-comms-contact-email">{c.email || '—'}</span>
+                  {c.name ? (
+                    <span className="muted project-comms-contact-name">{c.name}</span>
+                  ) : null}
+                </div>
+                {onUpdateClientContacts && c.email ? (
+                  <button
+                    type="button"
+                    className="btn-danger btn-small"
+                    onClick={() => setDeleteTarget(c)}
+                    disabled={deleting || harvesting || loading}
+                  >
+                    Remove
+                  </button>
                 ) : null}
               </li>
             ))}
@@ -273,6 +305,21 @@ export default function ProjectCommunications({
         selectedFolder={clientFolder}
         onSelect={handleFolderSelect}
         onClose={() => setFolderPickerOpen(false)}
+      />
+
+      <ConfirmModal
+        open={Boolean(deleteTarget)}
+        title="Remove client email?"
+        message={
+          deleteTarget
+            ? `Remove ${deleteTarget.email} from this card? It can be added again if you harvest later — add it to Settings → Harvest email exclusions to skip it permanently.`
+            : ''
+        }
+        confirmLabel="Remove"
+        danger
+        busy={deleting}
+        onConfirm={confirmRemoveContact}
+        onCancel={() => !deleting && setDeleteTarget(null)}
       />
     </div>
   )

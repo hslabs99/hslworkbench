@@ -1,12 +1,12 @@
 import {
   collection,
+  db,
   doc,
   getDocs,
   onSnapshot,
   serverTimestamp,
   setDoc,
-} from 'firebase/firestore'
-import { db } from './firebase.js'
+} from './firestore.js'
 
 export const COLLECTION = 'communication_summary_colors'
 

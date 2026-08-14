@@ -1,5 +1,10 @@
 import { CLIENT_MAIL_ROOT_SEGMENTS } from './mailFolderConfig.js'
-import { parseEmailAddress, recipientAddressFromGraph, senderAddressFromGraph } from './emailAddress.js'
+import {
+  contactFromGraphEmailAddress,
+  parseEmailAddress,
+  recipientAddressFromGraph,
+  senderAddressFromGraph,
+} from './emailAddress.js'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
@@ -131,6 +136,174 @@ export async function listClientMailFolders(accessToken) {
     .sort((a, b) => a.displayName.localeCompare(b.displayName))
 }
 
+/** Flatten a mailbox folder tree into a depth-indented list for pickers. */
+export function flattenMailboxFolderTree(nodes, depth = 0) {
+  const rows = []
+  for (const node of nodes || []) {
+    rows.push({
+      id: node.id,
+      displayName: node.displayName,
+      path: node.path,
+      totalItemCount: node.totalItemCount ?? 0,
+      childFolderCount: node.childFolderCount ?? 0,
+      depth,
+    })
+    if (node.children?.length) {
+      rows.push(...flattenMailboxFolderTree(node.children, depth + 1))
+    }
+  }
+  return rows
+}
+
+async function folderNodeWithChildren(accessToken, folder, path) {
+  const node = {
+    id: folder.id,
+    displayName: folder.displayName,
+    path,
+    totalItemCount: folder.totalItemCount ?? 0,
+    childFolderCount: folder.childFolderCount ?? 0,
+    children: [],
+  }
+  if ((folder.childFolderCount || 0) > 0) {
+    const children = await listChildFoldersRaw(accessToken, folder.id)
+    children.sort((a, b) =>
+      (a.displayName || '').localeCompare(b.displayName || '', undefined, { sensitivity: 'base' }),
+    )
+    for (const child of children) {
+      node.children.push(
+        await folderNodeWithChildren(accessToken, child, `${path}/${child.displayName}`),
+      )
+    }
+  }
+  return node
+}
+
+/** Full mailbox folder tree (every nested child under each top-level folder). */
+export async function listMailboxFolderTree(accessToken) {
+  let roots
+  try {
+    roots = await listChildFoldersRaw(accessToken, 'msgfolderroot')
+  } catch {
+    roots = []
+    let url = `${GRAPH}/me/mailFolders?$top=100&$select=id,displayName,totalItemCount,childFolderCount`
+    while (url) {
+      const data = await graphGet(accessToken, url)
+      roots.push(...(data.value || []))
+      url = data['@odata.nextLink'] || null
+    }
+  }
+
+  roots.sort((a, b) =>
+    (a.displayName || '').localeCompare(b.displayName || '', undefined, { sensitivity: 'base' }),
+  )
+
+  const tree = []
+  for (const root of roots) {
+    tree.push(await folderNodeWithChildren(accessToken, root, root.displayName || ''))
+  }
+  return tree
+}
+
+/** Selected folder plus every descendant, any depth. */
+export async function listFolderAndDescendants(accessToken, folder) {
+  if (!folder?.id) return []
+  const result = [
+    {
+      id: folder.id,
+      displayName: folder.displayName || '',
+      path: folder.path || folder.displayName || '',
+    },
+  ]
+  const children = await listChildFoldersRaw(accessToken, folder.id)
+  children.sort((a, b) =>
+    (a.displayName || '').localeCompare(b.displayName || '', undefined, { sensitivity: 'base' }),
+  )
+  for (const child of children) {
+    const nested = await listFolderAndDescendants(accessToken, {
+      id: child.id,
+      displayName: child.displayName,
+      path: `${folder.path || folder.displayName || ''}/${child.displayName}`,
+    })
+    result.push(...nested)
+  }
+  return result
+}
+
+function harvestEntriesFromMessage(message) {
+  const entries = []
+  const from = contactFromGraphEmailAddress(message.from?.emailAddress)
+  if (from) entries.push(from)
+  for (const field of ['toRecipients', 'ccRecipients', 'replyTo']) {
+    for (const r of message[field] || []) {
+      const entry = contactFromGraphEmailAddress(r.emailAddress)
+      if (entry) entries.push(entry)
+    }
+  }
+  return entries
+}
+
+/**
+ * Harvest unique names/emails from a mailbox folder and all nested subfolders.
+ * Does not clear existing contacts — caller merges into the harvested client emails store.
+ */
+export async function harvestClientEmailsFromFolderTree(
+  accessToken,
+  rootFolder,
+  {
+    mailboxEmail = '',
+    globalExcludeEmails = [],
+    maxMessagesPerFolder = 2000,
+    onProgress,
+  } = {},
+) {
+  const folders = await listFolderAndDescendants(accessToken, rootFolder)
+  const exclude = new Set(
+    [mailboxEmail, ...(globalExcludeEmails || [])].map(normalizeEmail).filter(Boolean),
+  )
+  const byEmail = new Map()
+  let messagesScanned = 0
+
+  for (let i = 0; i < folders.length; i += 1) {
+    const folder = folders[i]
+    onProgress?.({
+      folder,
+      folderIndex: i + 1,
+      folderCount: folders.length,
+      messagesScanned,
+      uniqueSoFar: byEmail.size,
+    })
+
+    const messages = await fetchFolderMessages(accessToken, folder.id, {
+      maxMessages: maxMessagesPerFolder,
+      select: 'id,from,toRecipients,ccRecipients,replyTo',
+    })
+    messagesScanned += messages.length
+
+    for (const msg of messages) {
+      for (const entry of harvestEntriesFromMessage(msg)) {
+        const key = normalizeEmail(entry.email)
+        if (!key || exclude.has(key)) continue
+        if (!byEmail.has(key)) {
+          byEmail.set(key, {
+            email: key,
+            name: entry.name || '',
+            sourceFolder: folder.path || folder.displayName || '',
+          })
+        } else if (entry.name && !byEmail.get(key).name) {
+          byEmail.get(key).name = entry.name
+        }
+      }
+    }
+  }
+
+  const harvested = [...byEmail.values()].sort((a, b) => a.email.localeCompare(b.email))
+  return {
+    harvested,
+    foldersScanned: folders.length,
+    messagesScanned,
+  }
+}
+
 /** Lead queue folder options: DEV QUEUE root plus its subfolders. */
 export async function listLeadQueueFolderOptions(accessToken) {
   const root = await resolveMailFolderPath(accessToken, CLIENT_MAIL_ROOT_SEGMENTS)
@@ -211,12 +384,16 @@ function recipientEntries(message, fields) {
 }
 
 /** Fetch messages from a folder with pagination (for harvest). */
-export async function fetchFolderMessages(accessToken, folderId, { maxMessages = 500 } = {}) {
+export async function fetchFolderMessages(
+  accessToken,
+  folderId,
+  { maxMessages = 500, select = 'id,toRecipients,ccRecipients,from' } = {},
+) {
   const messages = []
   let url = new URL(`${GRAPH}/me/mailFolders/${folderId}/messages`)
   url.searchParams.set('$top', '100')
   url.searchParams.set('$orderby', 'receivedDateTime desc')
-  url.searchParams.set('$select', 'id,toRecipients,ccRecipients,from')
+  url.searchParams.set('$select', select)
 
   while (url && messages.length < maxMessages) {
     const data = await graphGet(accessToken, url.toString())

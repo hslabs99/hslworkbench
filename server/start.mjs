@@ -4,8 +4,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { handleOpenAiApi } from './openaiApi.js'
 import { handleMsApi } from './msApi.js'
+import { handleFirestoreApi } from './firestoreApi.js'
+import { handleMailingsApi } from './mailingsTrackApi.js'
 import { sendJson } from './httpUtils.js'
 import { ensureServerSecrets } from './secrets.js'
+import { loadLocalEnv } from './loadLocalEnv.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.join(__dirname, '..')
@@ -87,15 +90,30 @@ function proxyToStatic(req, res) {
 }
 
 async function main() {
+  loadLocalEnv(projectRoot)
   await ensureServerSecrets()
   const staticChild = await startSuperstatic()
 
   const server = http.createServer(async (req, res) => {
     const pathname = req.url?.split('?')[0] ?? ''
 
+    if (pathname === '/unsubscribe') {
+      try {
+        if (await handleMailingsApi(req, res, pathname, process.env)) return
+        sendJson(res, 404, { error: 'Unsubscribe route not found.' })
+      } catch (err) {
+        sendJson(res, 500, {
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+      return
+    }
+
     if (pathname.startsWith('/api/')) {
       try {
         if (handleMsApi(req, res, pathname, process.env)) return
+        if (await handleMailingsApi(req, res, pathname, process.env)) return
+        if (await handleFirestoreApi(req, res, pathname, process.env)) return
         const handled = await handleOpenAiApi(req, res, pathname, process.env)
         if (handled) return
         sendJson(res, 404, { error: 'API route not found.' })

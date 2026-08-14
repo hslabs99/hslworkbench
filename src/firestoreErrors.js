@@ -9,10 +9,11 @@ export function isFirestorePermissionError(err) {
 }
 
 export function formatFirestoreError(err) {
+  const message = err instanceof Error ? err.message : String(err || '')
   if (isFirestorePermissionError(err)) {
-    return 'Missing or insufficient permissions. Deploy Firestore rules: firebase deploy --only firestore:rules'
+    return `${message} Check FIREBASE_* in .env.local.`
   }
-  return err instanceof Error ? err.message : String(err)
+  return message
 }
 
 export function asFirestoreError(err) {

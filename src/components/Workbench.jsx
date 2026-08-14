@@ -24,6 +24,7 @@ import {
 import {
   addDoc,
   collection,
+  db,
   deleteDoc,
   doc,
   onSnapshot,
@@ -31,8 +32,7 @@ import {
   serverTimestamp,
   updateDoc,
   writeBatch,
-} from 'firebase/firestore'
-import { db } from '../firebase.js'
+} from '../firestore.js'
 import { nextAttention, normalizeAttention } from '../attention.js'
 import { recordProjectSiloChange } from '../projectHistory.js'
 import { recordProjectClientMailScan } from '../projectMailScan.js'

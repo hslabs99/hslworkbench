@@ -1,12 +1,12 @@
 import {
   addDoc,
   collection,
+  db,
   doc,
   serverTimestamp,
   updateDoc,
-} from 'firebase/firestore'
+} from './firestore.js'
 import { fetchMessagesSince, buildCommunicationSummaryText } from './communicationSummary.js'
-import { db } from './firebase.js'
 import { normalizeEmailAddress, senderAddressFromGraph } from './emailAddress.js'
 import { isExcludedHarvestEmail } from './harvestExclusionsCleanup.js'
 import {

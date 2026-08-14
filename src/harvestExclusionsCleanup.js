@@ -1,11 +1,11 @@
 import {
   collection,
+  db,
   doc,
   getDocs,
   serverTimestamp,
   writeBatch,
-} from 'firebase/firestore'
-import { db } from './firebase.js'
+} from './firestore.js'
 import { parseEmailAddress } from './emailAddress.js'
 
 /** Short-form email for exclusion matching (never compares long Outlook display strings). */
@@ -20,6 +20,16 @@ export function isExcludedHarvestEmail(email, excludeEmails) {
     (excludeEmails || []).map(normalizeHarvestEmail).filter(Boolean),
   )
   return exclude.has(normalized)
+}
+
+/** Remove a single harvested contact by email (normalized match). */
+export function removeClientContactByEmail(contacts, email) {
+  const target = normalizeHarvestEmail(email)
+  if (!target) return Array.isArray(contacts) ? [...contacts] : []
+
+  return (Array.isArray(contacts) ? contacts : []).filter(
+    (c) => normalizeHarvestEmail(c.email) !== target,
+  )
 }
 
 /** Drop clientContacts whose email appears in the exclusion list. */

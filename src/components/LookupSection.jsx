@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   addDoc,
   collection,
+  db,
   deleteDoc,
   doc,
   getDocs,
@@ -9,8 +10,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
-} from 'firebase/firestore'
-import { db } from '../firebase.js'
+} from '../firestore.js'
 import ReorderableListTable from './ReorderableListTable.jsx'
 export default function LookupSection({
   collectionName,

@@ -2,14 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   addDoc,
   collection,
+  db,
   deleteDoc,
   doc,
   onSnapshot,
   orderBy,
   query,
   serverTimestamp,
-} from 'firebase/firestore'
-import { db } from '../firebase.js'
+} from '../firestore.js'
 import {
   normalizeHarvestEmail,
   runHarvestExclusionCleanup,

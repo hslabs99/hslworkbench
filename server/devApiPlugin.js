@@ -1,6 +1,9 @@
 import { loadEnv } from 'vite'
+import { loadLocalEnv } from './loadLocalEnv.js'
+import { handleFirestoreApi } from './firestoreApi.js'
 import { handleOpenAiApi } from './openaiApi.js'
 import { handleMsApi } from './msApi.js'
+import { handleMailingsApi } from './mailingsTrackApi.js'
 import { readJsonBody, sendJson } from './httpUtils.js'
 import { seedDevUsersOnce } from './seedUsers.js'
 import { ensureServerSecrets } from './secrets.js'
@@ -29,9 +32,12 @@ export function devApiPlugin() {
   return {
     name: 'hsl-dev-api',
     configureServer(server) {
-      const env = loadEnv('', process.cwd(), '')
+      loadLocalEnv(server.config.root || process.cwd())
+      const env = loadEnv(server.config.mode || 'development', server.config.root || process.cwd(), '')
       for (const [key, value] of Object.entries(env)) {
-        process.env[key] = value
+        if (process.env[key] == null || process.env[key] === '') {
+          process.env[key] = value
+        }
       }
       // OPENAI_API_KEY in .env.local overrides Secret Manager for local dev (see .env.example).
 
@@ -58,11 +64,19 @@ export function devApiPlugin() {
       server.middlewares.use(async (req, res, next) => {
         const path = req.url?.split('?')[0]
 
-        if (path?.startsWith('/api/')) {
+        if (path?.startsWith('/api/') || path === '/unsubscribe') {
           await secretsReady
         }
 
         if (handleMsApi(req, res, path, process.env)) {
+          return
+        }
+
+        if (await handleMailingsApi(req, res, path, process.env)) {
+          return
+        }
+
+        if (await handleFirestoreApi(req, res, path, process.env)) {
           return
         }
 

@@ -93,11 +93,11 @@ export function MicrosoftAuthProvider({ children }) {
     }
   }, [])
 
-  const login = useCallback(async () => {
+  const login = useCallback(async (scopes = graphScopes) => {
     const config = await resolveMicrosoftConfig()
     if (!config) throw new Error('Microsoft sign-in is not configured.')
     const msal = await getMsalInstance(config)
-    await msal.loginRedirect({ scopes: graphScopes })
+    await msal.loginRedirect({ scopes })
   }, [])
 
   const logout = useCallback(async () => {
@@ -107,7 +107,7 @@ export function MicrosoftAuthProvider({ children }) {
     await msal.logoutRedirect()
   }, [])
 
-  const getAccessToken = useCallback(async () => {
+  const getAccessToken = useCallback(async (scopes = graphScopes) => {
     const config = await resolveMicrosoftConfig()
     if (!config) throw new Error('Microsoft sign-in is not configured.')
     const msal = await getMsalInstance(config)
@@ -115,10 +115,10 @@ export function MicrosoftAuthProvider({ children }) {
     if (!active) throw new Error('Not signed in to Microsoft.')
 
     try {
-      const result = await msal.acquireTokenSilent({ scopes: graphScopes, account: active })
+      const result = await msal.acquireTokenSilent({ scopes, account: active })
       return result.accessToken
     } catch {
-      await msal.acquireTokenRedirect({ scopes: graphScopes, account: active })
+      await msal.acquireTokenRedirect({ scopes, account: active })
       return null
     }
   }, [])

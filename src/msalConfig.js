@@ -27,6 +27,9 @@ export const msalConfig = buildMsalConfig()
 
 export const graphScopes = ['User.Read', 'Mail.Read']
 
+/** Extra consent for campaign sends from the signed-in mailbox. */
+export const graphSendScopes = ['User.Read', 'Mail.Read', 'Mail.Send']
+
 export function isMicrosoftConfiguredFromBuild() {
   return Boolean(import.meta.env.VITE_MS_CLIENT_ID && import.meta.env.VITE_MS_TENANT_ID)
 }

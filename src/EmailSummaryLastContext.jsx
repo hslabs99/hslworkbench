@@ -1,6 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react'
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { collection, db, onSnapshot, orderBy, query } from './firestore.js'
 import { coerceToDate } from './commSummaryFormat.js'
 import { isExcludedHarvestEmail } from './harvestExclusionsCleanup.js'
 

@@ -1,5 +1,6 @@
 import {
   collection,
+  db,
   doc,
   getDocs,
   onSnapshot,
@@ -8,8 +9,7 @@ import {
   setDoc,
   where,
   writeBatch,
-} from 'firebase/firestore'
-import { db } from './firebase.js'
+} from './firestore.js'
 import { parseEmailAddress } from './emailAddress.js'
 import { mergeHarvestedClientContacts } from './graphMail.js'
 import { isExcludedHarvestEmail } from './harvestExclusionsCleanup.js'

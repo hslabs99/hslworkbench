@@ -1,14 +1,5 @@
-import { getApps, initializeApp } from 'firebase/app'
-import {
-  addDoc,
-  collection,
-  getDocs,
-  getFirestore,
-  query,
-  serverTimestamp,
-  where,
-} from 'firebase/firestore'
-import { firebaseConfig } from '../src/firebaseConfig.js'
+import { addDoc, collection, getDocs, query, serverTimestamp, where } from 'firebase/firestore'
+import { getServerFirestore } from './firebaseApp.js'
 
 export const USERS_COLLECTION = 'users'
 
@@ -24,14 +15,9 @@ function normalizeUsername(username) {
     .toLowerCase()
 }
 
-function getDb() {
-  const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig)
-  return getFirestore(app)
-}
-
 /** Inserts the dev seed user once if missing. Safe to call on every dev server start. */
 export async function seedDevUsersOnce() {
-  const db = getDb()
+  const db = getServerFirestore()
   const username = normalizeUsername(DEV_SEED_USER.username)
   const existing = await getDocs(
     query(collection(db, USERS_COLLECTION), where('username', '==', username)),

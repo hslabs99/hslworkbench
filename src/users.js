@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  db,
   deleteDoc,
   doc,
   getDocs,
@@ -8,8 +9,7 @@ import {
   serverTimestamp,
   updateDoc,
   where,
-} from 'firebase/firestore'
-import { db } from './firebase.js'
+} from './firestore.js'
 
 export const USERS_COLLECTION = 'users'
 

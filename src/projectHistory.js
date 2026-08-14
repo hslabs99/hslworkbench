@@ -1,13 +1,13 @@
 import {
   addDoc,
   collection,
+  db,
   onSnapshot,
   query,
   serverTimestamp,
   where,
   orderBy,
-} from 'firebase/firestore'
-import { db } from './firebase.js'
+} from './firestore.js'
 
 export const COLLECTION = 'project_history'
 

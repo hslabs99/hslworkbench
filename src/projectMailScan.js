@@ -1,5 +1,4 @@
-import { doc, serverTimestamp, updateDoc } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { db, doc, serverTimestamp, updateDoc } from './firestore.js'
 
 /** Record that the project's client mail folder was scanned (harvest or summarise). */
 export async function recordProjectClientMailScan(projectId) {

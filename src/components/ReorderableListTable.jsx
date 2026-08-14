@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { doc, writeBatch } from 'firebase/firestore'
-import { db } from '../firebase.js'
+import { db, doc, writeBatch } from '../firestore.js'
 import { reorderListItems } from '../listReorder.js'
 
 async function persistListSortOrder(collectionName, orderedItems) {

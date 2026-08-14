@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { collection, onSnapshot, orderBy, query } from 'firebase/firestore'
-import { db } from '../firebase.js'
+import { collection, db, onSnapshot, orderBy, query } from '../firestore.js'
 
 export function useTechStackLookup() {
   const [items, setItems] = useState([])

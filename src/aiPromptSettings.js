@@ -1,5 +1,4 @@
-import { doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { db, doc, onSnapshot, serverTimestamp, setDoc, updateDoc } from './firestore.js'
 import { asFirestoreError } from './firestoreErrors.js'
 import { getDefaultPromptConfig, mergePromptOverrides } from './aiPromptsShared.js'
 

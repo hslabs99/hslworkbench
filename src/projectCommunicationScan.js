@@ -6,8 +6,7 @@ import {
   getSummarisedMessageIds,
   saveEmailSummaries,
 } from './emailSummaries.js'
-import { doc, serverTimestamp, updateDoc } from 'firebase/firestore'
-import { db } from './firebase.js'
+import { db, doc, serverTimestamp, updateDoc } from './firestore.js'
 import { enrichRowsWithOpenAIBatched } from './openaiCommunicationSummary.js'
 import { projectClientMailFolder, projectContactEmails } from './graphMail.js'
 import {

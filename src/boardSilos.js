@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  db,
   deleteDoc,
   doc,
   getDocs,
@@ -9,8 +10,7 @@ import {
   serverTimestamp,
   updateDoc,
   writeBatch,
-} from 'firebase/firestore'
-import { db } from './firebase.js'
+} from './firestore.js'
 import { asFirestoreError } from './firestoreErrors.js'
 import { isUnassignedSiloId, UNASSIGNED_SILO } from './unassignedQueue.js'
 

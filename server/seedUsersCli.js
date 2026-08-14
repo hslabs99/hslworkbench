@@ -1,4 +1,12 @@
+import { loadEnv } from 'vite'
+import { loadLocalEnv } from './loadLocalEnv.js'
 import { seedDevUsersOnce } from './seedUsers.js'
+
+loadLocalEnv()
+const env = loadEnv('development', process.cwd(), '')
+for (const [key, value] of Object.entries(env)) {
+  if (!process.env[key]) process.env[key] = value
+}
 
 seedDevUsersOnce()
   .then((result) => {
