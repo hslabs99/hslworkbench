@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
 import { graphSendScopes } from '../msalConfig.js'
 import { eligibleAudienceMembers, fetchMailingConfig, sendMailingCampaign } from '../mailingSend.js'
+import { sendGridClientHint } from '../runtimeMode.js'
 import {
   createMailingCampaign,
   deleteMailingCampaign,
@@ -47,6 +48,7 @@ export default function MailingCampaignsSection() {
     fromEmail: '',
     fromName: '',
     testRecipient: '',
+    setupHint: '',
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -85,7 +87,13 @@ export default function MailingCampaignsSection() {
       .catch(() => {})
     fetchMailingConfig()
       .then(setMailConfig)
-      .catch(() => {})
+      .catch((err) => {
+        setMailConfig((prev) => ({
+          ...prev,
+          configured: false,
+          setupHint: err instanceof Error ? err.message : String(err),
+        }))
+      })
     return () => {
       unsubC()
       unsubT()
@@ -255,7 +263,10 @@ export default function MailingCampaignsSection() {
         throw new Error('Connect your Microsoft account to send via Outlook Graph.')
       }
       if (sendVia === 'sendgrid' && !mailConfig.configured) {
-        throw new Error('SendGrid is not configured. Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env.local.')
+        throw new Error(
+          sendGridClientHint(mailConfig) ||
+            'SendGrid is not configured.',
+        )
       }
       if (!form.fromEmail.trim()) {
         throw new Error(
@@ -350,8 +361,7 @@ export default function MailingCampaignsSection() {
         )}
         {sendVia === 'sendgrid' && !mailConfig.configured && (
           <p className="form-error">
-            SendGrid is not configured. Add SENDGRID_API_KEY and SENDGRID_FROM_EMAIL to .env.local and
-            restart the dev server.
+            {sendGridClientHint(mailConfig)}
           </p>
         )}
 

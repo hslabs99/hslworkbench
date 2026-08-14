@@ -1,5 +1,7 @@
 import { parseEmailAddress } from '../src/emailAddress.js'
+import { sendGridMissingMessage } from './envHints.js'
 import { loadLocalEnv } from './loadLocalEnv.js'
+import { getRuntimeMode } from './runtimeMode.js'
 
 const SENDGRID_URL = 'https://api.sendgrid.com/v3/mail/send'
 
@@ -19,18 +21,19 @@ function failWithDiagnostics(message, diagnostics) {
 
 export function getSendGridConfig(env = process.env) {
   loadLocalEnv()
-  const apiKey = String(env.SENDGRID_API_KEY || process.env.SENDGRID_API_KEY || '').trim()
-  const fromEmail = parseEmailAddress(env.SENDGRID_FROM_EMAIL || process.env.SENDGRID_FROM_EMAIL || '')
-  const fromName = String(env.SENDGRID_FROM_NAME || process.env.SENDGRID_FROM_NAME || '').trim()
-  const testRecipient = parseEmailAddress(
-    env.SENDGRID_TEST_RECIPIENT || process.env.SENDGRID_TEST_RECIPIENT || fromEmail,
-  )
+  const resolved = { ...env, ...process.env }
+  const apiKey = String(resolved.SENDGRID_API_KEY || '').trim()
+  const fromEmail = parseEmailAddress(resolved.SENDGRID_FROM_EMAIL || '')
+  const fromName = String(resolved.SENDGRID_FROM_NAME || '').trim()
+  const testRecipient = parseEmailAddress(resolved.SENDGRID_TEST_RECIPIENT || fromEmail)
   return {
     configured: Boolean(apiKey && fromEmail),
     apiKey,
     fromEmail,
     fromName,
     testRecipient,
+    setupHint: apiKey && fromEmail ? '' : sendGridMissingMessage(),
+    runtime: getRuntimeMode(),
   }
 }
 
@@ -66,7 +69,7 @@ export async function sendSendGridMail({
         : 'SENDGRID_FROM_EMAIL is missing.',
   )
   if (!config.apiKey) {
-    failWithDiagnostics('SendGrid is not configured. Set SENDGRID_API_KEY in .env.local.', {
+    failWithDiagnostics(sendGridMissingMessage(), {
       ok: false,
       steps,
       durationMs: Date.now() - started,

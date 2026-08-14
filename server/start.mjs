@@ -9,6 +9,7 @@ import { handleMailingsApi } from './mailingsTrackApi.js'
 import { sendJson } from './httpUtils.js'
 import { ensureServerSecrets } from './secrets.js'
 import { loadLocalEnv } from './loadLocalEnv.js'
+import { isCloudRun, pinRuntimeMode } from './runtimeMode.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.join(__dirname, '..')
@@ -90,6 +91,7 @@ function proxyToStatic(req, res) {
 }
 
 async function main() {
+  pinRuntimeMode(isCloudRun() ? 'hosted' : 'local')
   loadLocalEnv(projectRoot)
   await ensureServerSecrets()
   const staticChild = await startSuperstatic()

@@ -1,5 +1,6 @@
 /** Google Secret Manager — single source for server secrets (local + App Hosting). */
 export const OPENAI_SECRET_ID = 'openaiApiKey'
+export const SENDGRID_SECRET_ID = 'sendgridApiKey'
 
 const DEFAULT_GCP_PROJECT = 'hslworkbench'
 
@@ -26,21 +27,37 @@ async function accessSecret(secretId) {
   return value
 }
 
-async function loadServerSecrets() {
-  if (process.env.OPENAI_API_KEY?.trim()) {
-    console.log('[hsl-workbench] OpenAI key ready (runtime env)')
+async function loadRequiredSecret(envKey, secretId, label) {
+  if (process.env[envKey]?.trim()) {
+    console.log(`[hsl-workbench] ${label} ready (runtime env)`)
     return
   }
-
   try {
-    process.env.OPENAI_API_KEY = await accessSecret(OPENAI_SECRET_ID)
-    console.log(`[hsl-workbench] OpenAI key loaded from Secret Manager (${OPENAI_SECRET_ID})`)
+    process.env[envKey] = await accessSecret(secretId)
+    console.log(`[hsl-workbench] ${label} loaded from Secret Manager (${secretId})`)
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err)
-    throw new Error(
-      `Failed to load OpenAI key from Secret Manager (${OPENAI_SECRET_ID}): ${detail}`,
-    )
+    throw new Error(`Failed to load ${label} from Secret Manager (${secretId}): ${detail}`)
   }
+}
+
+async function loadOptionalSecret(envKey, secretId, label) {
+  if (process.env[envKey]?.trim()) {
+    console.log(`[hsl-workbench] ${label} ready (runtime env)`)
+    return
+  }
+  try {
+    process.env[envKey] = await accessSecret(secretId)
+    console.log(`[hsl-workbench] ${label} loaded from Secret Manager (${secretId})`)
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    console.warn(`[hsl-workbench] ${label} not loaded (${secretId}): ${detail}`)
+  }
+}
+
+async function loadServerSecrets() {
+  await loadRequiredSecret('OPENAI_API_KEY', OPENAI_SECRET_ID, 'OpenAI key')
+  await loadOptionalSecret('SENDGRID_API_KEY', SENDGRID_SECRET_ID, 'SendGrid key')
 }
 
 /** Load server secrets once; safe to call from dev and production entrypoints. */

@@ -1,3 +1,5 @@
+import { isHostedBrowser } from './runtimeMode.js'
+
 export function isFirestorePermissionError(err) {
   const code = err?.code || ''
   const message = err instanceof Error ? err.message : String(err || '')
@@ -11,7 +13,9 @@ export function isFirestorePermissionError(err) {
 export function formatFirestoreError(err) {
   const message = err instanceof Error ? err.message : String(err || '')
   if (isFirestorePermissionError(err)) {
-    return `${message} Check FIREBASE_* in .env.local.`
+    return isHostedBrowser()
+      ? `${message} Check FIREBASE_* on App Hosting (RUNTIME).`
+      : `${message} Check FIREBASE_* in .env.local.`
   }
   return message
 }

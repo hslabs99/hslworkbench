@@ -7,6 +7,7 @@ import { handleMailingsApi } from './mailingsTrackApi.js'
 import { readJsonBody, sendJson } from './httpUtils.js'
 import { seedDevUsersOnce } from './seedUsers.js'
 import { ensureServerSecrets } from './secrets.js'
+import { pinRuntimeMode } from './runtimeMode.js'
 import {
   analyzeSqlExportAsync,
   buildImportCommand,
@@ -32,6 +33,7 @@ export function devApiPlugin() {
   return {
     name: 'hsl-dev-api',
     configureServer(server) {
+      pinRuntimeMode('local')
       loadLocalEnv(server.config.root || process.cwd())
       const env = loadEnv(server.config.mode || 'development', server.config.root || process.cwd(), '')
       for (const [key, value] of Object.entries(env)) {

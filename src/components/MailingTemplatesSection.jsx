@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { DEFAULT_TEMPLATE_HTML } from '../emailHtml.js'
 import { fetchMailingConfig, sendTestEmail } from '../mailingSend.js'
+import { sendGridClientHint } from '../runtimeMode.js'
 import {
   createMailingTemplate,
   deleteMailingTemplate,
@@ -26,6 +27,7 @@ export default function MailingTemplatesSection() {
     fromEmail: '',
     fromName: '',
     testRecipient: '',
+    setupHint: '',
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -39,7 +41,13 @@ export default function MailingTemplatesSection() {
   useEffect(() => {
     fetchMailingConfig()
       .then(setMailConfig)
-      .catch(() => {})
+      .catch((err) => {
+        setMailConfig((prev) => ({
+          ...prev,
+          configured: false,
+          setupHint: err instanceof Error ? err.message : String(err),
+        }))
+      })
     return subscribeMailingTemplates(
       (rows) => {
         setTemplates(rows)
@@ -113,7 +121,10 @@ export default function MailingTemplatesSection() {
     })
     try {
       if (!mailConfig.configured) {
-        throw new Error('SendGrid is not configured. Set SENDGRID_API_KEY and SENDGRID_FROM_EMAIL in .env.local.')
+        throw new Error(
+          sendGridClientHint(mailConfig) ||
+            'SendGrid is not configured.',
+        )
       }
       await sendTestEmail({
         toEmail: mailConfig.testRecipient || mailConfig.fromEmail,
@@ -174,8 +185,7 @@ export default function MailingTemplatesSection() {
 
         {!mailConfig.configured && (
           <p className="form-error">
-            SendGrid is not configured. Add SENDGRID_API_KEY and SENDGRID_FROM_EMAIL to .env.local and
-            restart the dev server.
+            {sendGridClientHint(mailConfig)}
           </p>
         )}
 

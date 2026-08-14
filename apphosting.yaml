@@ -74,3 +74,26 @@ env:
   #   value: https://hslworkbench--hslworkbench.asia-southeast1.hosted.app/auth/microsoft/callback
   #   availability:
   #     - BUILD
+
+  # SendGrid — API key is a secret (RUNTIME). Create and grant first:
+  #   firebase apphosting:secrets:set sendgridApiKey
+  #   firebase apphosting:secrets:grantaccess sendgridApiKey
+  - variable: SENDGRID_API_KEY
+    secret: sendgridApiKey
+    availability:
+      - RUNTIME
+
+  - variable: SENDGRID_FROM_EMAIL
+    value: mike@xlsexperts.co.nz
+    availability:
+      - RUNTIME
+
+  - variable: SENDGRID_FROM_NAME
+    value: XLS Experts
+    availability:
+      - RUNTIME
+
+  - variable: SENDGRID_TEST_RECIPIENT
+    value: mike@xlsexperts.co.nz
+    availability:
+      - RUNTIME

@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
+import { getRuntimeMode } from './runtimeMode.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PROJECT_ROOT = path.join(__dirname, '..')
@@ -33,11 +34,22 @@ function readEnvFile(filePath) {
 }
 
 /**
- * Load `.env` then `.env.local` from the project root into process.env.
- * `.env.local` always wins for FIREBASE_* so empty shell vars cannot hide the file.
+ * Load `.env` then `.env.local` into process.env on a laptop only.
+ * App Hosting / Cloud Run never reads those files — keys come from yaml + Secret Manager.
  */
 export function loadLocalEnv(root = PROJECT_ROOT) {
   if (loaded) return process.env
+
+  const runtime = getRuntimeMode(root)
+  if (runtime === 'hosted') {
+    loaded = true
+    loadedFrom = []
+    const projectId = process.env.FIREBASE_PROJECT_ID || '(missing)'
+    console.log(
+      `[hsl-workbench] Runtime hosted (App Hosting). Firestore project "${projectId}". SendGrid ${process.env.SENDGRID_API_KEY ? 'configured' : 'missing'}`,
+    )
+    return process.env
+  }
 
   const files = [path.join(root, '.env'), path.join(root, '.env.local')]
   const merged = {}
@@ -52,17 +64,21 @@ export function loadLocalEnv(root = PROJECT_ROOT) {
 
   for (const [key, value] of Object.entries(merged)) {
     if (value == null) continue
-    const override = FILE_OVERRIDE_KEYS.includes(key)
+    const text = String(value)
+    if (!text.trim()) continue
     const current = process.env[key]
-    if (override || current == null || current === '') {
-      process.env[key] = String(value)
+    const fileWins = FILE_OVERRIDE_KEYS.includes(key)
+    if (fileWins || current == null || current === '') {
+      process.env[key] = text
     }
   }
 
   loaded = true
   const projectId = process.env.FIREBASE_PROJECT_ID || '(missing)'
   const source = loadedFrom.length ? loadedFrom.join(' + ') : 'process env only'
-  console.log(`[hsl-workbench] Env loaded (${source}). Firestore project "${projectId}". SendGrid ${process.env.SENDGRID_API_KEY ? 'configured' : 'missing'}`)
+  console.log(
+    `[hsl-workbench] Runtime local (${source}). Firestore project "${projectId}". SendGrid ${process.env.SENDGRID_API_KEY ? 'configured' : 'missing'}`,
+  )
   return process.env
 }
 

@@ -333,6 +333,8 @@ export async function handleMailingsApi(req, res, pathname, env = process.env) {
         fromEmail: config.fromEmail,
         fromName: config.fromName,
         testRecipient: config.testRecipient,
+        setupHint: config.setupHint || '',
+        runtime: config.runtime || 'local',
       })
       return true
     }
