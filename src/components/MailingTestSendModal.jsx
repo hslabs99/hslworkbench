@@ -35,9 +35,13 @@ export default function MailingTestSendModal({ open, report, onClose }) {
         </h2>
         <p className="confirm-modal-message">
           {running
-            ? 'Running each send step so you can confirm compose, SendGrid, and SMTP delivery all completed.'
+            ? `Running each send step so you can confirm compose and ${
+                report.provider === 'graph' ? 'Outlook Graph' : 'SendGrid'
+              } delivery all completed.`
             : done
-              ? `SendGrid accepted the message for SMTP delivery${report.to ? ` to ${report.to}` : ''}. Check that inbox.`
+              ? report.provider === 'graph'
+                ? `Outlook Graph sent the test${report.to ? ` to ${report.to}` : ''}. Check that inbox and Sent Items.`
+                : `SendGrid accepted the message for SMTP delivery${report.to ? ` to ${report.to}` : ''}. Check that inbox.`
               : report.error || 'The test send did not complete.'}
         </p>
 
@@ -55,6 +59,10 @@ export default function MailingTestSendModal({ open, report, onClose }) {
                 ? `${report.toName} <${report.to}>`
                 : report.to || '—'}
             </dd>
+          </div>
+          <div>
+            <dt>Via</dt>
+            <dd>{report.provider === 'graph' ? 'Outlook Graph' : 'SendGrid'}</dd>
           </div>
           <div>
             <dt>Subject</dt>

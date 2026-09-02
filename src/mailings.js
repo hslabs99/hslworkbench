@@ -2,6 +2,7 @@ import { db, deleteDoc, doc, getDoc, onSnapshot, serverTimestamp, setDoc, update
 import { parseEmailAddress } from './emailAddress.js'
 import { asFirestoreError } from './firestoreErrors.js'
 import { loadMailingExclusionEmails } from './mailingExclusions.js'
+import { normalizeEmailLayout } from './emailHtml.js'
 
 /** Stored as boardSettings docs so this uses the existing Firestore rules. */
 const COLLECTION = 'boardSettings'
@@ -124,6 +125,7 @@ function templateSummary(id, data) {
     name: data.name || 'Untitled template',
     description: data.description || '',
     subject: data.subject || '',
+    layout: normalizeEmailLayout(data.layout),
     updatedAt: new Date().toISOString(),
   }
 }
@@ -161,6 +163,10 @@ function campaignSummary(id, data) {
     sendVia: data.sendVia === 'sendgrid' ? 'sendgrid' : 'graph',
     status: data.status || 'draft',
     stats: { ...EMPTY_CAMPAIGN_STATS, ...(data.stats || {}) },
+    batchSize: Math.min(100, Math.max(1, Math.floor(Number(data.batchSize)) || 5)),
+    lastBatchAt: data.lastBatchAt || null,
+    deliveryReceiptRequested: Boolean(data.deliveryReceiptRequested),
+    readReceiptRequested: Boolean(data.readReceiptRequested),
     sentAt: data.sentAt || null,
     updatedAt: new Date().toISOString(),
   }
@@ -174,6 +180,7 @@ export async function createMailingTemplate(data) {
       description: String(data.description || '').trim(),
       subject: String(data.subject || '').trim(),
       htmlBody: String(data.htmlBody || ''),
+      layout: normalizeEmailLayout(data.layout),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     }
@@ -235,6 +242,81 @@ export function uniqueMembers(rows) {
   return [...byEmail.values()].sort((a, b) => a.email.localeCompare(b.email))
 }
 
+function membersFromContacts(contacts) {
+  return uniqueMembers(
+    (contacts || []).map((row) => ({
+      email: row.email,
+      name: row.name,
+      company: row.company,
+      source: 'master',
+    })),
+  )
+}
+
+function audienceResult(id, name, added, skipped, total) {
+  return { id, name: name || 'Untitled audience', added, skipped, total }
+}
+
+export async function addContactsToAudience(id, contacts) {
+  try {
+    const current = await getMailingAudience(id)
+    if (!current) throw new Error('Audience not found.')
+    const before = uniqueMembers(current.members)
+    const known = new Set(before.map((row) => row.email))
+    const incoming = membersFromContacts(contacts)
+    const addedMembers = incoming.filter((row) => !known.has(row.email))
+    const skipped = incoming.length - addedMembers.length
+    if (!addedMembers.length) {
+      return audienceResult(id, current.name, 0, skipped, before.length)
+    }
+    const members = uniqueMembers([...before, ...addedMembers])
+    await updateMailingAudience(id, { members })
+    return audienceResult(id, current.name, addedMembers.length, skipped, members.length)
+  } catch (err) {
+    throw asFirestoreError(err)
+  }
+}
+
+export async function createMailingAudienceFromContacts(data, contacts) {
+  const members = membersFromContacts(contacts)
+  if (!members.length) throw new Error('Select contacts with a valid email.')
+  const id = await createMailingAudience({
+    name: data?.name,
+    description: data?.description,
+    members,
+  })
+  return audienceResult(
+    id,
+    String(data?.name || '').trim() || 'Untitled audience',
+    members.length,
+    0,
+    members.length,
+  )
+}
+
+export async function loadAudienceMembershipMap(audiences) {
+  const map = new Map()
+  const list = Array.isArray(audiences) ? audiences : []
+  const loaded = await Promise.all(
+    list.map(async (summary) => {
+      const full = await getMailingAudience(summary.id)
+      return {
+        id: summary.id,
+        name: full?.name || summary.name || 'Untitled audience',
+        members: uniqueMembers(full?.members),
+      }
+    }),
+  )
+  for (const audience of loaded) {
+    for (const member of audience.members) {
+      const current = map.get(member.email) || []
+      current.push({ id: audience.id, name: audience.name })
+      map.set(member.email, current)
+    }
+  }
+  return map
+}
+
 export async function createMailingAudience(data) {
   try {
     const id = newId()
@@ -290,6 +372,10 @@ export async function createMailingCampaign(data) {
       sendVia: data.sendVia === 'sendgrid' ? 'sendgrid' : 'graph',
       status: 'draft',
       stats: { ...EMPTY_CAMPAIGN_STATS },
+      batchSize: Math.min(100, Math.max(1, Math.floor(Number(data.batchSize)) || 5)),
+      lastBatchAt: null,
+      deliveryReceiptRequested: Boolean(data.deliveryReceiptRequested),
+      readReceiptRequested: Boolean(data.readReceiptRequested),
       sendIds: [],
       sentAt: null,
       createdAt: serverTimestamp(),

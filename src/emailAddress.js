@@ -1,18 +1,31 @@
 /**
  * Short-form email only — bare address for storage, display, and matching.
  * Parses Outlook strings like "Name<user@host.com>" → user@host.com
+ * Recipients are always a single address: trailing ; or , (and extra pasted
+ * addresses after those separators) are stripped.
  */
 export function parseEmailAddress(value) {
-  const raw = String(value || '').trim()
+  let raw = String(value || '').trim()
   if (!raw) return ''
 
+  raw = raw.replace(/^['"]+|['"]+$/g, '').trim()
+  raw = raw.split(/[;,]/)[0].trim()
+  raw = raw.replace(/[;,\s]+$/g, '')
+
   const inAngles = raw.match(/<([^<>@\s]+@[^<>@\s]+)>/i)
-  if (inAngles) return inAngles[1].trim().toLowerCase()
+  if (inAngles) return finishEmail(inAngles[1])
 
-  const bare = raw.match(/([^\s@<>]+@[^\s@<>]+\.[^\s@<>]+)/)
-  if (bare) return bare[1].trim().toLowerCase()
+  const bare = raw.match(/([^\s@<>]+@[^\s@<>]+\.[A-Za-z0-9.-]+)/)
+  if (bare) return finishEmail(bare[1])
 
-  return raw.toLowerCase()
+  return finishEmail(raw)
+}
+
+function finishEmail(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[;,.]+$/g, '')
 }
 
 /** Alias — always returns short-form address for comparisons. */

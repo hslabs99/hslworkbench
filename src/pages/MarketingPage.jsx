@@ -22,11 +22,6 @@ export default function MarketingPage() {
     <div className="systems-page marketing-page">
       <div className="systems-toolbar">
         <h2 className="systems-heading">Marketing</h2>
-        <p className="systems-intro muted">
-          Build email templates, audiences, and campaigns. Send via Outlook Graph (safer drip-feed
-          from your mailbox) or SendGrid. Harvest and the master client list feed who you can mail.
-          Unsubscribes go to the exclusions list.
-        </p>
       </div>
 
       <div className="detail-tabs settings-tabs" role="tablist" aria-label="Marketing sections">

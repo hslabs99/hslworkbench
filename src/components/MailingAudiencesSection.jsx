@@ -381,8 +381,8 @@ export default function MailingAudiencesSection() {
         <div>
           <h3 className="lookup-section-title">Audiences</h3>
           <p className="lookup-section-intro muted">
-            A mailing list you can fill from the master client list, by typing addresses, or by
-            importing rows.
+            Filter and select contacts on the master client list, then add them to an audience.
+            You can also type addresses or import rows here. Campaigns send to an audience.
           </p>
         </div>
         <button type="button" className="btn-primary" onClick={startNew}>

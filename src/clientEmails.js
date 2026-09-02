@@ -1,10 +1,42 @@
 import { db, doc, getDoc, onSnapshot, serverTimestamp, setDoc } from './firestore.js'
 import { parseEmailAddress } from './emailAddress.js'
+import { asFirestoreError } from './firestoreErrors.js'
+import { extraFieldsFromRow, mergeContactFields } from './contactFields.js'
 import { loadMailingExclusionEmails } from './mailingExclusions.js'
 
 /** Stored as a boardSettings document so it uses the existing Firestore rules. */
 const COLLECTION = 'boardSettings'
 export const CLIENT_EMAILS_DOC = 'clientEmails'
+
+function normalizeMailings(list) {
+  if (!Array.isArray(list)) return []
+  return list
+    .map((row) => {
+      if (!row || typeof row !== 'object') return null
+      const at = String(row.at || '').trim()
+      const campaignName = String(row.campaignName || '').trim()
+      if (!at && !campaignName) return null
+      return {
+        at,
+        campaignId: String(row.campaignId || ''),
+        campaignName: campaignName || 'Campaign',
+        templateName: String(row.templateName || ''),
+        subject: String(row.subject || ''),
+        status: row.status === 'failed' ? 'failed' : 'sent',
+        sendVia: row.sendVia === 'sendgrid' ? 'sendgrid' : 'graph',
+        sendId: String(row.sendId || ''),
+        error: String(row.error || ''),
+      }
+    })
+    .filter(Boolean)
+    .slice(-40)
+}
+
+export function lastMailingAt(row) {
+  const mailings = normalizeMailings(row?.mailings)
+  if (!mailings.length) return ''
+  return mailings.reduce((latest, item) => (item.at > latest ? item.at : latest), mailings[0].at)
+}
 
 function itemFromRow(row) {
   const email = parseEmailAddress(row?.email)
@@ -14,10 +46,12 @@ function itemFromRow(row) {
     name: row.name || '',
     email,
     company: row.company || '',
+    ...extraFieldsFromRow(row),
     sourceFolder: row.sourceFolder || '',
     source: row.source || (row.sourceFolder ? 'harvest' : 'manual'),
     importBatch: row.importBatch || '',
     unsubscribed: Boolean(row.unsubscribed),
+    mailings: normalizeMailings(row.mailings),
   }
 }
 
@@ -32,14 +66,16 @@ function normalizeItems(data) {
 }
 
 function itemsPayload(items) {
-  return items.map(({ name, email, company, sourceFolder, source, importBatch, unsubscribed }) => ({
-    name: name || '',
-    email,
-    company: company || '',
-    sourceFolder: sourceFolder || '',
-    source: source || 'manual',
-    importBatch: importBatch || '',
-    unsubscribed: Boolean(unsubscribed),
+  return items.map((item) => ({
+    name: item.name || '',
+    email: item.email,
+    company: item.company || '',
+    ...extraFieldsFromRow(item),
+    sourceFolder: item.sourceFolder || '',
+    source: item.source || 'manual',
+    importBatch: item.importBatch || '',
+    unsubscribed: Boolean(item.unsubscribed),
+    mailings: normalizeMailings(item.mailings),
   }))
 }
 
@@ -146,14 +182,8 @@ export async function upsertMasterContacts(
       }
       const existing = known.get(email)
       if (existing) {
-        let next = existing
-        if (fillBlanks && !existing.name && h.name) {
-          next = { ...next, name: h.name }
-          namesFilled += 1
-        }
-        if (fillBlanks && !existing.company && h.company) {
-          next = { ...next, company: h.company }
-        }
+        const next = mergeContactFields(existing, h, { includeNameCompany: fillBlanks })
+        if (fillBlanks && !existing.name && next.name) namesFilled += 1
         if (next !== existing) known.set(email, next)
         else skipped += 1
         continue
@@ -163,10 +193,12 @@ export async function upsertMasterContacts(
         email,
         name: h.name || '',
         company: h.company || '',
+        ...extraFieldsFromRow(h),
         sourceFolder: h.sourceFolder || '',
         source: h.source || source,
         importBatch: h.importBatch || batch,
         unsubscribed: Boolean(h.unsubscribed),
+        mailings: normalizeMailings(h.mailings),
       })
       added += 1
     }
@@ -174,6 +206,77 @@ export async function upsertMasterContacts(
     const items = [...known.values()].sort((a, b) => a.email.localeCompare(b.email))
     await writeItems(ref, snap, items)
     return { added, skipped, skippedExcluded, namesFilled }
+  } catch (err) {
+    throw asFirestoreError(err)
+  }
+}
+
+/**
+ * Import harvested contacts. Existing emails are never updated.
+ * Every new row is tagged with importBatch. Requires a batch reference.
+ */
+export async function importMasterContacts(rows, { source = 'import', importBatch = '' } = {}) {
+  const batch = String(importBatch || '').trim()
+  if (!batch) throw new Error('A batch reference is required.')
+  const ref = doc(db, COLLECTION, CLIENT_EMAILS_DOC)
+  try {
+    const snap = await getDoc(ref)
+    const known = new Map(normalizeItems(snap.data()).map((row) => [row.email, row]))
+    const excluded = await loadMailingExclusionEmails()
+    const exceptions = []
+    let added = 0
+
+    for (const h of rows || []) {
+      const email = parseEmailAddress(h.email)
+      if (!email) {
+        exceptions.push({
+          email: String(h.email || '').trim(),
+          name: h.name || '',
+          company: h.company || '',
+          reason: 'no_email',
+        })
+        continue
+      }
+      if (excluded.has(email)) {
+        exceptions.push({
+          email,
+          name: h.name || '',
+          company: h.company || '',
+          reason: 'excluded',
+        })
+        continue
+      }
+      const existing = known.get(email)
+      if (existing) {
+        exceptions.push({
+          email,
+          name: h.name || existing.name || '',
+          company: h.company || existing.company || '',
+          reason: 'existing',
+          existingBatch: existing.importBatch || '',
+        })
+        continue
+      }
+      known.set(email, {
+        id: email,
+        email,
+        name: h.name || '',
+        company: h.company || '',
+        ...extraFieldsFromRow(h),
+        sourceFolder: h.sourceFolder || '',
+        source: h.source || source,
+        importBatch: batch,
+        unsubscribed: Boolean(h.unsubscribed),
+        mailings: normalizeMailings(h.mailings),
+      })
+      added += 1
+    }
+
+    if (added) {
+      const items = [...known.values()].sort((a, b) => a.email.localeCompare(b.email))
+      await writeItems(ref, snap, items)
+    }
+    return { added, exceptions }
   } catch (err) {
     throw asFirestoreError(err)
   }
@@ -192,11 +295,13 @@ export async function saveClientEmail(row) {
       email,
       name: row.name || existing?.name || '',
       company: row.company ?? existing?.company ?? '',
+      ...extraFieldsFromRow({ ...existing, ...row }),
       sourceFolder: row.sourceFolder ?? existing?.sourceFolder ?? '',
       source: row.source || existing?.source || 'manual',
       importBatch: row.importBatch ?? existing?.importBatch ?? '',
       unsubscribed:
         row.unsubscribed != null ? Boolean(row.unsubscribed) : Boolean(existing?.unsubscribed),
+      mailings: normalizeMailings(row.mailings ?? existing?.mailings),
     })
     const items = [...known.values()].sort((a, b) => a.email.localeCompare(b.email))
     await writeItems(ref, snap, items)
@@ -220,6 +325,28 @@ export async function removeClientEmails(emails) {
     const items = current.filter((row) => !ids.has(row.email))
     await writeItems(ref, snap, items)
     return { removed: current.length - items.length }
+  } catch (err) {
+    throw asFirestoreError(err)
+  }
+}
+
+export async function appendContactMailing(email, entry) {
+  const id = parseEmailAddress(email)
+  if (!id) return { updated: false }
+  const ref = doc(db, COLLECTION, CLIENT_EMAILS_DOC)
+  try {
+    const snap = await getDoc(ref)
+    const items = normalizeItems(snap.data())
+    const index = items.findIndex((row) => row.email === id)
+    if (index < 0) return { updated: false }
+    const nextEntry = normalizeMailings([entry])[0]
+    if (!nextEntry) return { updated: false }
+    items[index] = {
+      ...items[index],
+      mailings: [...normalizeMailings(items[index].mailings), nextEntry].slice(-40),
+    }
+    await writeItems(ref, snap, items)
+    return { updated: true }
   } catch (err) {
     throw asFirestoreError(err)
   }

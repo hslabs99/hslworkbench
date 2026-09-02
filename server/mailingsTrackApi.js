@@ -9,6 +9,11 @@ import { parseEmailAddress } from '../src/emailAddress.js'
 import { getServerFirestore } from './firebaseApp.js'
 import { readJsonBody, sendJson } from './httpUtils.js'
 import { getSendGridConfig, sendSendGridMail } from './sendgridMail.js'
+import {
+  handleMailingFileDownload,
+  handleMailingFileUpload,
+  mailingFileIdFromPath,
+} from './mailingFiles.js'
 
 const PIXEL_GIF = Buffer.from(
   'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
@@ -361,6 +366,17 @@ export async function handleMailingsApi(req, res, pathname, env = process.env) {
       return true
     }
 
+    if (pathname === '/api/mailings/files' && req.method === 'POST') {
+      await handleMailingFileUpload(req, res, env)
+      return true
+    }
+
+    const mailingFileId = mailingFileIdFromPath(pathname)
+    if (mailingFileId && req.method === 'GET') {
+      await handleMailingFileDownload(req, res, mailingFileId, env)
+      return true
+    }
+
     const db = getServerFirestore(env)
     if (pathname === '/api/mailings/track/open' && req.method === 'GET') {
       await handleOpen(req, res, db)
@@ -384,6 +400,9 @@ export async function handleMailingsApi(req, res, pathname, env = process.env) {
       res.statusCode = 200
       res.setHeader('Content-Type', 'image/gif')
       res.end(PIXEL_GIF)
+      return true
+    }
+    if (pathname.includes('/api/mailings/files') && res.headersSent) {
       return true
     }
     if (isPublicUnsubscribe) {

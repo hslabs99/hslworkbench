@@ -1,15 +1,24 @@
-import { useLayoutEffect, useState } from 'react'
-import Workbench from './components/Workbench.jsx'
-import MarketingPage from './pages/MarketingPage.jsx'
-import SettingsPage from './pages/SettingsPage.jsx'
+import { lazy, Suspense, useLayoutEffect, useState } from 'react'
 import LoginPage from './pages/LoginPage.jsx'
 import { useMicrosoftAuth } from './MicrosoftAuthContext.jsx'
 import { useUsersAuth } from './UsersAuthContext.jsx'
+
+const Workbench = lazy(() => import('./components/Workbench.jsx'))
+const MarketingPage = lazy(() => import('./pages/MarketingPage.jsx'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage.jsx'))
 
 const PAGE_SUBTITLES = {
   dashboard: 'Client project board',
   marketing: 'Email templates, campaigns, and audiences',
   settings: 'Lookup tables and settings',
+}
+
+function PageFallback() {
+  return (
+    <div className="login-page">
+      <p className="muted">Loading…</p>
+    </div>
+  )
 }
 
 export default function App() {
@@ -73,9 +82,21 @@ export default function App() {
           </nav>
         </div>
       </header>
-      {page === 'dashboard' && <Workbench />}
-      {page === 'marketing' && <MarketingPage />}
-      {page === 'settings' && <SettingsPage />}
+      {page === 'dashboard' && (
+        <Suspense fallback={<PageFallback />}>
+          <Workbench />
+        </Suspense>
+      )}
+      {page === 'marketing' && (
+        <Suspense fallback={<PageFallback />}>
+          <MarketingPage />
+        </Suspense>
+      )}
+      {page === 'settings' && (
+        <Suspense fallback={<PageFallback />}>
+          <SettingsPage />
+        </Suspense>
+      )}
     </div>
   )
 }

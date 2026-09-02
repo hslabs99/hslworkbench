@@ -16,6 +16,7 @@
   "dependencies": {
     "@azure/msal-browser": "^5.11.0",
     "@google-cloud/secret-manager": "^6.2.0",
+    "@google-cloud/storage": "^8.0.1",
     "@tiptap/extension-color": "^3.30.0",
     "@tiptap/extension-font-family": "^3.30.0",
     "@tiptap/extension-highlight": "^3.30.0",

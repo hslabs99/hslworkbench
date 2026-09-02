@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { parseEmailAddress } from '../emailAddress.js'
+import { emailLayoutLabel } from '../emailHtml.js'
 import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
 import { graphSendScopes } from '../msalConfig.js'
-import { eligibleAudienceMembers, fetchMailingConfig, sendMailingCampaign } from '../mailingSend.js'
+import { eligibleAudienceMembers, fetchMailingConfig, normalizeBatchSize, sendMailingCampaign, sendTestEmail, unsentAudienceMembers } from '../mailingSend.js'
 import { sendGridClientHint } from '../runtimeMode.js'
 import {
   createMailingCampaign,
@@ -14,10 +16,16 @@ import {
   subscribeMailingAudiences,
   subscribeMailingCampaigns,
   subscribeMailingTemplates,
+  uniqueMembers,
   updateMailingCampaign,
 } from '../mailings.js'
 import ConfirmModal from './ConfirmModal.jsx'
+import MailingCampaignAnalytics from './MailingCampaignAnalytics.jsx'
 import MailingCampaignPreview from './MailingCampaignPreview.jsx'
+import MailingCampaignRecipients from './MailingCampaignRecipients.jsx'
+import MailingCampaignSendModal from './MailingCampaignSendModal.jsx'
+import MailingTestSendMenu, { testRecipientFromInput } from './MailingTestSendMenu.jsx'
+import MailingTestSendModal from './MailingTestSendModal.jsx'
 import MicrosoftConnectCard from './MicrosoftConnectCard.jsx'
 
 const EMPTY = {
@@ -28,6 +36,30 @@ const EMPTY = {
   fromEmail: '',
   fromName: '',
   sendVia: 'graph',
+  batchSize: 5,
+  deliveryReceiptRequested: false,
+  readReceiptRequested: false,
+}
+
+function localDateKey(value) {
+  const date = value ? new Date(value) : new Date()
+  if (Number.isNaN(date.getTime())) return ''
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function sentBatchToday(lastBatchAt) {
+  return Boolean(lastBatchAt) && localDateKey(lastBatchAt) === localDateKey()
+}
+
+function lastBatchLine(lastBatchAt) {
+  if (!lastBatchAt) return ''
+  const date = new Date(lastBatchAt)
+  if (Number.isNaN(date.getTime())) return ''
+  if (sentBatchToday(lastBatchAt)) return `A batch already went out today (${date.toLocaleTimeString()}).`
+  return `Last batch ${date.toLocaleString()}.`
 }
 
 function statsLine(stats = EMPTY_CAMPAIGN_STATS) {
@@ -56,14 +88,17 @@ export default function MailingCampaignsSection() {
   const [form, setForm] = useState(EMPTY)
   const [saving, setSaving] = useState(false)
   const [sending, setSending] = useState(false)
-  const [progress, setProgress] = useState(null)
+  const [testing, setTesting] = useState(false)
+  const [testReport, setTestReport] = useState(null)
   const [sends, setSends] = useState([])
   const [deleteTarget, setDeleteTarget] = useState(null)
-  const [sendConfirm, setSendConfirm] = useState(false)
+  const [sendSession, setSendSession] = useState(null)
   const [unsubscribed, setUnsubscribed] = useState(() => new Set())
   const [fullTemplate, setFullTemplate] = useState(null)
   const [fullAudience, setFullAudience] = useState(null)
   const [campaignTab, setCampaignTab] = useState('campaign')
+  const [selectedEmails, setSelectedEmails] = useState(() => new Set())
+  const [previewMembers, setPreviewMembers] = useState(null)
 
   useEffect(() => {
     const unsubC = subscribeMailingCampaigns(
@@ -138,27 +173,45 @@ export default function MailingCampaignsSection() {
   }, [form.audienceId])
 
   useEffect(() => {
+    setSelectedEmails(new Set())
+    setPreviewMembers(null)
+  }, [editing, form.audienceId])
+
+  useEffect(() => {
     if (!userEmail) return
     setForm((f) => {
       if (f.sendVia === 'sendgrid') return f
-      if (f.fromEmail === userEmail && (!userName || f.fromName === userName)) return f
-      return { ...f, fromEmail: userEmail, fromName: userName || f.fromName }
+      const nextName = f.fromName.trim() ? f.fromName : userName || f.fromName
+      if (f.fromEmail === userEmail && nextName === f.fromName) return f
+      return { ...f, fromEmail: userEmail, fromName: nextName }
     })
   }, [userEmail, userName])
 
   const selectedTemplate = fullTemplate || templates.find((t) => t.id === form.templateId) || null
   const selectedAudience = fullAudience || audiences.find((a) => a.id === form.audienceId) || null
   const sendableCount = eligibleAudienceMembers(fullAudience?.members, unsubscribed).length
+  const remainingMembers = unsentAudienceMembers(fullAudience?.members, unsubscribed, sends)
+  const remainingCount = remainingMembers.length
+  const alreadySentCount = Math.max(0, sendableCount - remainingCount)
   const sendVia = form.sendVia === 'sendgrid' ? 'sendgrid' : 'graph'
+  const batchSize = normalizeBatchSize(form.batchSize)
+  const todayTake = Math.min(batchSize, remainingCount || batchSize)
   const graphReady = Boolean(account && userEmail)
   const sendgridReady = Boolean(mailConfig.configured && form.fromEmail.trim())
   const fromReady = sendVia === 'graph' ? graphReady : sendgridReady
-  const canSend =
+  const canTest =
+    !testing &&
     !sending &&
+    Boolean(selectedTemplate?.htmlBody) &&
+    Boolean(String(selectedTemplate?.subject || '').trim()) &&
+    fromReady
+  const canBatch =
+    !sending &&
+    !testing &&
     editing !== 'new' &&
     Boolean(form.templateId) &&
     Boolean(form.audienceId) &&
-    sendableCount > 0 &&
+    remainingCount > 0 &&
     fromReady
 
   const current = editing && editing !== 'new' ? campaigns.find((c) => c.id === editing) : null
@@ -172,7 +225,7 @@ export default function MailingCampaignsSection() {
       fromName: userName || '',
     })
     setSends([])
-    setProgress(null)
+    setSendSession(null)
     setError(null)
     setCampaignTab('campaign')
   }
@@ -186,18 +239,18 @@ export default function MailingCampaignsSection() {
       templateId: row.templateId || '',
       audienceId: row.audienceId || '',
       sendVia: nextVia,
+      batchSize: normalizeBatchSize(row.batchSize),
       fromEmail:
         nextVia === 'graph'
           ? userEmail || row.fromEmail || ''
           : row.fromEmail || mailConfig.fromEmail || '',
-      fromName:
-        nextVia === 'graph'
-          ? userName || row.fromName || ''
-          : row.fromName || mailConfig.fromName || '',
+      fromName: row.fromName || (nextVia === 'graph' ? userName : mailConfig.fromName) || '',
+      deliveryReceiptRequested: Boolean(row.deliveryReceiptRequested),
+      readReceiptRequested: Boolean(row.readReceiptRequested),
     })
-    setProgress(null)
+    setSendSession(null)
     setError(null)
-    setCampaignTab('campaign')
+    setCampaignTab('recipients')
     listSendsForCampaign(row.id)
       .then(setSends)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
@@ -207,13 +260,12 @@ export default function MailingCampaignsSection() {
     setForm((f) => {
       const nextForm = { ...f, sendVia: next }
       if (next === 'graph') {
-        if (userEmail) {
-          nextForm.fromEmail = userEmail
-          nextForm.fromName = userName || f.fromName
-        }
+        if (userEmail) nextForm.fromEmail = userEmail
       } else if (!f.fromEmail || f.fromEmail === userEmail) {
         nextForm.fromEmail = mailConfig.fromEmail || f.fromEmail
-        nextForm.fromName = mailConfig.fromName || f.fromName
+        if (!f.fromName.trim() || f.fromName === userName) {
+          nextForm.fromName = mailConfig.fromName || f.fromName
+        }
       }
       return nextForm
     })
@@ -234,6 +286,9 @@ export default function MailingCampaignsSection() {
         sendVia,
         fromEmail: form.fromEmail.trim(),
         fromName: form.fromName.trim(),
+        batchSize,
+        deliveryReceiptRequested: Boolean(form.deliveryReceiptRequested),
+        readReceiptRequested: Boolean(form.readReceiptRequested),
       }
       if (editing === 'new') {
         const id = await createMailingCampaign(payload)
@@ -248,25 +303,161 @@ export default function MailingCampaignsSection() {
     }
   }
 
-  async function handleSend() {
-    setSendConfirm(false)
+  async function handleTestSend(recipientRaw) {
+    setTesting(true)
+    setError(null)
+    const fromEmail = sendVia === 'graph' ? userEmail : form.fromEmail.trim()
+    const fromName = form.fromName.trim() || (sendVia === 'graph' ? userName || userEmail : '')
+    const meEmail = parseEmailAddress(userEmail || mailConfig.testRecipient || '')
+    const { email: toEmail, name: toName } = testRecipientFromInput(recipientRaw, {
+      meEmail,
+      meName: fromName || userName || meEmail,
+    })
+    setTestReport({
+      status: 'running',
+      provider: sendVia,
+      steps: [],
+      from: fromEmail,
+      fromName,
+      to: toEmail,
+      toName,
+      subject: selectedTemplate?.subject ? `[TEST] ${selectedTemplate.subject}` : '',
+    })
+    try {
+      if (sendVia === 'graph' && !graphReady) {
+        throw new Error('Connect your Microsoft account to send a test via Outlook Graph.')
+      }
+      if (sendVia === 'sendgrid' && !mailConfig.configured) {
+        throw new Error(sendGridClientHint(mailConfig) || 'SendGrid is not configured.')
+      }
+      if (!toEmail) throw new Error('Enter an email address to send the test to.')
+      const template = (await getMailingTemplate(form.templateId)) || selectedTemplate
+      if (!template?.htmlBody) throw new Error('Select an email template with a body.')
+      if (!String(template.subject || '').trim()) throw new Error('The email template needs a subject.')
+      await sendTestEmail({
+        sendVia,
+        toEmail,
+        toName: toName || toEmail,
+        subject: `[TEST] ${template.subject.trim()}`,
+        htmlBody: template.htmlBody,
+        origin: window.location.origin,
+        fromEmail,
+        fromName,
+        layout: template.layout,
+        deliveryReceiptRequested: Boolean(form.deliveryReceiptRequested),
+        readReceiptRequested: Boolean(form.readReceiptRequested),
+        getAccessToken,
+        onReport: setTestReport,
+      })
+    } catch (err) {
+      if (err?.report) {
+        setTestReport(err.report)
+      } else {
+        setTestReport((prev) => ({
+          ...(prev || {}),
+          status: 'fail',
+          error: err instanceof Error ? err.message : String(err),
+          steps: prev?.steps || [],
+        }))
+      }
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  function openSendBatch(batchSize) {
+    if (!canBatch) return
+    const take = batchSize === 'all' ? remainingMembers.length : Math.min(Number(batchSize), remainingMembers.length)
+    const preview = remainingMembers.slice(0, take).map((row) => ({
+      email: row.email,
+      name: row.name || '',
+      status: 'pending',
+      error: '',
+    }))
+    setError(null)
+    setSendSession({
+      open: true,
+      phase: 'confirm',
+      batchSize,
+      selectedEmails: null,
+      rows: preview,
+      remaining: remainingCount,
+      alreadySent: alreadySentCount,
+      targeted: sendableCount,
+      error: '',
+    })
+  }
+
+  function openSendSelected() {
+    const members = remainingMembers.filter((row) => selectedEmails.has(row.email))
+    if (!members.length) {
+      setError('Select one or more unsent contacts to send.')
+      return
+    }
+    const preview = members.map((row) => ({
+      email: row.email,
+      name: row.name || '',
+      status: 'pending',
+      error: '',
+    }))
+    setError(null)
+    setCampaignTab('recipients')
+    setSendSession({
+      open: true,
+      phase: 'confirm',
+      batchSize: members.length,
+      selectedEmails: members.map((row) => row.email),
+      rows: preview,
+      remaining: remainingCount,
+      alreadySent: alreadySentCount,
+      targeted: sendableCount,
+      error: '',
+    })
+  }
+
+  function openPreview(members) {
+    if (Array.isArray(members) && members.length) {
+      setPreviewMembers(members)
+    } else if (selectedEmails.size) {
+      setPreviewMembers(
+        uniqueMembers(fullAudience?.members).filter((row) => selectedEmails.has(row.email)),
+      )
+    } else {
+      setPreviewMembers(null)
+    }
+    setCampaignTab('preview')
+  }
+
+  async function handleSend(size = sendSession?.batchSize ?? batchSize) {
     if (editing === 'new') {
       setError('Save the campaign before sending.')
       return
     }
 
     const id = editing
+    const picked = sendSession?.selectedEmails || null
     setSending(true)
     setError(null)
+    setSendSession((prev) =>
+      prev
+        ? { ...prev, open: true, phase: 'sending', error: '', batchSize: size }
+        : {
+            open: true,
+            phase: 'sending',
+            batchSize: size,
+            rows: [],
+            remaining: remainingCount,
+            alreadySent: alreadySentCount,
+            targeted: sendableCount,
+            error: '',
+          },
+    )
     try {
       if (sendVia === 'graph' && !graphReady) {
         throw new Error('Connect your Microsoft account to send via Outlook Graph.')
       }
       if (sendVia === 'sendgrid' && !mailConfig.configured) {
-        throw new Error(
-          sendGridClientHint(mailConfig) ||
-            'SendGrid is not configured.',
-        )
+        throw new Error(sendGridClientHint(mailConfig) || 'SendGrid is not configured.')
       }
       if (!form.fromEmail.trim()) {
         throw new Error(
@@ -280,7 +471,14 @@ export default function MailingCampaignsSection() {
       if (!template?.htmlBody) throw new Error('Select an email template.')
       if (!audience) throw new Error('Select an audience.')
       const result = await sendMailingCampaign({
-        campaign: { id, name: form.name },
+        campaign: {
+          id,
+          name: form.name,
+          templateName: selectedTemplate?.name,
+          stats: current?.stats,
+          deliveryReceiptRequested: Boolean(form.deliveryReceiptRequested),
+          readReceiptRequested: Boolean(form.readReceiptRequested),
+        },
         template,
         audience,
         sendVia,
@@ -288,19 +486,85 @@ export default function MailingCampaignsSection() {
         fromName: form.fromName.trim(),
         origin: window.location.origin,
         getAccessToken,
-        onProgress: setProgress,
+        batchSize: size,
+        selectedEmails: picked,
+        onProgress: (event) => {
+          setSendSession((prev) => {
+            const base = prev || {
+              open: true,
+              phase: 'sending',
+              batchSize: size,
+              rows: [],
+              remaining: remainingCount,
+              alreadySent: alreadySentCount,
+              targeted: sendableCount,
+              error: '',
+            }
+            if (event.phase === 'start') {
+              return {
+                ...base,
+                open: true,
+                phase: 'sending',
+                rows: event.rows || base.rows,
+                remaining: event.remaining,
+                alreadySent: event.alreadySent,
+                targeted: event.targeted,
+              }
+            }
+            if (event.phase === 'recipient') {
+              return {
+                ...base,
+                open: true,
+                phase: 'sending',
+                remaining: event.remaining,
+                alreadySent: event.alreadySent,
+                rows: (base.rows || []).map((row) =>
+                  row.email === event.email
+                    ? {
+                        ...row,
+                        status: event.status,
+                        error: event.error || '',
+                        at: event.at || row.at,
+                      }
+                    : row,
+                ),
+              }
+            }
+            if (event.phase === 'done') {
+              return {
+                ...base,
+                open: true,
+                phase: 'done',
+                remaining: event.remaining,
+                alreadySent: event.alreadySent,
+                targeted: event.targeted,
+              }
+            }
+            return base
+          })
+        },
       })
       const rows = await listSendsForCampaign(id)
       setSends(rows)
-      setProgress({
-        done: true,
-        sent: result.sent,
-        failed: result.failed,
-        total: result.targeted,
-        index: result.targeted,
-      })
+      setSelectedEmails(new Set())
+      setSendSession((prev) =>
+        prev
+          ? {
+              ...prev,
+              open: true,
+              phase: 'done',
+              remaining: result.remaining,
+              alreadySent: result.alreadySent,
+              targeted: result.targeted,
+            }
+          : prev,
+      )
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      setSendSession((prev) =>
+        prev ? { ...prev, phase: prev.phase === 'confirm' ? 'confirm' : 'done', error: message } : prev,
+      )
     } finally {
       setSending(false)
     }
@@ -320,14 +584,9 @@ export default function MailingCampaignsSection() {
   const connectCard = (
     <MicrosoftConnectCard
       scopes={graphSendScopes}
-      hint="Campaigns can send from this Outlook mailbox (safer drip-feed for clients) or via SendGrid. Connect here to use Outlook Graph — Mail.Send consent is requested when you send."
+      hint="Connect Outlook to drip-feed from this mailbox. Stay signed in on this desktop — click Send today's batch once a day. Mail.Send consent is requested when you send."
     />
   )
-
-  const sendConfirmMessage =
-    sendVia === 'graph'
-      ? `Send ${sendableCount} email${sendableCount === 1 ? '' : 's'} from your Outlook mailbox (${form.fromName || form.fromEmail} <${form.fromEmail}>) using “${selectedTemplate?.name || 'the selected template'}” to “${selectedAudience?.name || 'the selected audience'}”? Messages go one-by-one via Microsoft Graph with a short pause between each.`
-      : `Send ${sendableCount} email${sendableCount === 1 ? '' : 's'} from ${form.fromName || form.fromEmail || 'SendGrid'} <${form.fromEmail}> using “${selectedTemplate?.name || 'the selected template'}” to “${selectedAudience?.name || 'the selected audience'}”? Each recipient is sent individually via SendGrid.`
 
   if (editing) {
     return (
@@ -340,17 +599,33 @@ export default function MailingCampaignsSection() {
             <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>
               Back to list
             </button>
-            <button type="button" className="btn-secondary" onClick={handleSave} disabled={saving || sending}>
+            <button type="button" className="btn-secondary" onClick={handleSave} disabled={saving || sending || testing}>
               {saving ? 'Saving…' : 'Save'}
             </button>
+            <MailingTestSendMenu
+              disabled={!canTest}
+              busy={testing}
+              meEmail={parseEmailAddress(userEmail || mailConfig.testRecipient || '')}
+              onSend={handleTestSend}
+            />
             <button
               type="button"
               className="btn-primary"
-              onClick={() => setSendConfirm(true)}
-              disabled={!canSend}
+              onClick={() => openSendBatch(batchSize)}
+              disabled={!canBatch}
             >
-              {sending ? 'Sending…' : `Send to ${sendableCount}`}
+              Send today's {todayTake}
             </button>
+            {remainingCount > batchSize ? (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => openSendBatch('all')}
+                disabled={!canBatch}
+              >
+                Send remaining {remainingCount}
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -379,10 +654,29 @@ export default function MailingCampaignsSection() {
             type="button"
             role="tab"
             className="detail-tab"
+            aria-selected={campaignTab === 'recipients'}
+            onClick={() => setCampaignTab('recipients')}
+          >
+            Recipients
+            {fullAudience?.members?.length ? ` (${fullAudience.members.length})` : ''}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="detail-tab"
             aria-selected={campaignTab === 'preview'}
-            onClick={() => setCampaignTab('preview')}
+            onClick={() => openPreview()}
           >
             Preview
+          </button>
+          <button
+            type="button"
+            role="tab"
+            className="detail-tab"
+            aria-selected={campaignTab === 'analytics'}
+            onClick={() => setCampaignTab('analytics')}
+          >
+            Analytics
           </button>
         </div>
 
@@ -393,6 +687,36 @@ export default function MailingCampaignsSection() {
             fromName={form.fromName}
             fromEmail={form.fromEmail}
             excludedEmails={unsubscribed}
+            members={previewMembers}
+          />
+        ) : campaignTab === 'recipients' ? (
+          <>
+            {error ? <p className="form-error">{error}</p> : null}
+            <MailingCampaignRecipients
+              audience={fullAudience}
+              sends={sends}
+              excludedEmails={unsubscribed}
+              selectedEmails={selectedEmails}
+              batchSize={batchSize}
+              canSend={
+                !sending &&
+                editing !== 'new' &&
+                Boolean(form.templateId) &&
+                Boolean(form.audienceId) &&
+                fromReady
+              }
+              sending={sending}
+              onSelectedChange={setSelectedEmails}
+              onSendSelected={openSendSelected}
+              onPreviewSelected={(members) => openPreview(members)}
+            />
+          </>
+        ) : campaignTab === 'analytics' ? (
+          <MailingCampaignAnalytics
+            sends={sends}
+            remainingCount={remainingCount}
+            sendableCount={sendableCount}
+            campaignName={form.name}
           />
         ) : (
           <>
@@ -428,6 +752,12 @@ export default function MailingCampaignsSection() {
                 </option>
               ))}
             </select>
+            {selectedTemplate ? (
+              <small className="muted">
+                Format: {emailLayoutLabel(fullTemplate?.layout || selectedTemplate.layout)}. Change this on
+                the Email templates tab.
+              </small>
+            ) : null}
           </label>
           <label>
             Audience
@@ -458,7 +788,7 @@ export default function MailingCampaignsSection() {
                 />
                 <span>
                   Outlook Graph
-                  <small>Drip-feed from the connected mailbox. Safer for client campaigns.</small>
+                  <small>Send from the connected mailbox. Inbox From name is the Microsoft 365 display name, not this form.</small>
                 </span>
               </label>
               <label className={`mailing-send-via-option${sendVia === 'sendgrid' ? ' is-selected' : ''}`}>
@@ -471,7 +801,7 @@ export default function MailingCampaignsSection() {
                 />
                 <span>
                   SendGrid
-                  <small>API send from an authenticated domain. Faster for larger lists.</small>
+                  <small>API send from an authenticated domain. Use this when you need a branded From name such as XLS Experts.</small>
                 </span>
               </label>
             </div>
@@ -499,16 +829,90 @@ export default function MailingCampaignsSection() {
               onChange={(e) => setForm((f) => ({ ...f, fromName: e.target.value }))}
               placeholder={
                 sendVia === 'graph'
-                  ? userName || 'Mailbox display name'
+                  ? 'Used if you switch to SendGrid'
                   : mailConfig.fromName || 'Display name'
               }
-              readOnly={sendVia === 'graph'}
+            />
+            {sendVia === 'graph' && (
+              <small className="muted">
+                Outlook will still show{' '}
+                <strong>{userName || 'the Microsoft 365 display name'}</strong>, not this field.
+              </small>
+            )}
+          </label>
+          <div className="mailing-send-via full-width">
+            <span>Tracking</span>
+            <div className="mailing-send-via-options" role="group" aria-label="Tracking">
+              <label
+                className={`mailing-send-via-option${form.deliveryReceiptRequested ? ' is-selected' : ''}${
+                  sendVia !== 'graph' ? ' is-disabled' : ''
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.deliveryReceiptRequested)}
+                  disabled={sendVia !== 'graph'}
+                  onChange={(e) => setForm((f) => ({ ...f, deliveryReceiptRequested: e.target.checked }))}
+                />
+                <span>
+                  Request a delivery receipt
+                  <small>
+                    Confirm the message was delivered to the recipient&apos;s email server. Receipts arrive in
+                    this Outlook mailbox.
+                  </small>
+                </span>
+              </label>
+              <label
+                className={`mailing-send-via-option${form.readReceiptRequested ? ' is-selected' : ''}${
+                  sendVia !== 'graph' ? ' is-disabled' : ''
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.readReceiptRequested)}
+                  disabled={sendVia !== 'graph'}
+                  onChange={(e) => setForm((f) => ({ ...f, readReceiptRequested: e.target.checked }))}
+                />
+                <span>
+                  Request a read receipt
+                  <small>
+                    Ask the recipient&apos;s email app to confirm they viewed the message. They can decline.
+                  </small>
+                </span>
+              </label>
+            </div>
+            {sendVia !== 'graph' ? (
+              <small className="muted">Delivery and read receipts are Outlook Graph options, same as in Outlook Options → Tracking.</small>
+            ) : null}
+          </div>
+
+          <label>
+            Emails per day
+            <input
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              value={form.batchSize}
+              onChange={(e) => setForm((f) => ({ ...f, batchSize: e.target.value }))}
+              onBlur={() => setForm((f) => ({ ...f, batchSize: normalizeBatchSize(f.batchSize) }))}
             />
           </label>
           {sendVia === 'graph' && (
             <p className="muted full-width">
-              Outlook Graph always sends as the connected mailbox. From name and address come from
-              that account.
+              Outlook Graph always sends from the connected mailbox
+              ({userEmail || 'sign in to Outlook'}). Microsoft overwrites the From name with the
+              mailbox display name in Microsoft 365 — currently{' '}
+              <strong>{userName || 'the connected account'}</strong>. A test to yourself will keep
+              showing that directory name. To appear as a brand (for example XLS Experts), send via
+              SendGrid, or rename the mailbox in Microsoft 365. Click{' '}
+              <strong>Send today&apos;s {todayTake}</strong> once a day while this app is open.
+            </p>
+          )}
+          {sendVia === 'sendgrid' && (
+            <p className="muted full-width">
+              Click <strong>Send today&apos;s {todayTake}</strong> once a day. SendGrid is optional here;
+              use it if you want API delivery instead of the Outlook mailbox.
             </p>
           )}
 
@@ -519,8 +923,12 @@ export default function MailingCampaignsSection() {
           )}
           {selectedAudience && (
             <p className="muted">
-              {sendableCount} sendable of {fullAudience?.members?.length || selectedAudience.memberCount || 0} members (exclusions
-              skipped).
+              {alreadySentCount} sent · {remainingCount} remaining of {sendableCount} sendable
+              ({fullAudience?.members?.length || selectedAudience.memberCount || 0} in audience, exclusions
+              skipped)
+              {remainingCount > 0
+                ? ` · about ${Math.ceil(remainingCount / batchSize)} day${Math.ceil(remainingCount / batchSize) === 1 ? '' : 's'} at ${batchSize} per day.`
+                : '.'}
             </p>
           )}
 
@@ -528,60 +936,50 @@ export default function MailingCampaignsSection() {
             <div className="mailing-stats">
               <strong>{current.status || 'draft'}</strong>
               <span>{sendViaLabel(current.sendVia)}</span>
+              <span>{batchSize} per day</span>
+              {form.deliveryReceiptRequested ? <span>Delivery receipt</span> : null}
+              {form.readReceiptRequested ? <span>Read receipt</span> : null}
               <span>{statsLine(current.stats)}</span>
             </div>
           )}
-
-          {progress && (
-            <p className={progress.done ? 'harvest-client-emails-result' : 'muted'}>
-              {progress.done
-                ? `Finished: ${progress.sent} sent, ${progress.failed} failed (${progress.total} targeted).`
-                : `Sending ${progress.index} of ${progress.total} — ${progress.email || ''}`}
+          {lastBatchLine(current?.lastBatchAt) ? (
+            <p className={`muted${sentBatchToday(current?.lastBatchAt) ? ' mailing-batch-today' : ''}`}>
+              {lastBatchLine(current?.lastBatchAt)}
             </p>
+          ) : null}
+
+          {remainingCount === 0 && sendableCount > 0 && (
+            <p className="harvest-client-emails-result">All sendable contacts have been mailed this campaign.</p>
           )}
 
           {error && <p className="form-error">{error}</p>}
         </form>
-
-        {sends.length > 0 && (
-          <div className="systems-card mailing-wide-card">
-            <h4>Send log</h4>
-            <div className="mailing-table-wrap">
-              <table className="systems-table">
-                <thead>
-                  <tr>
-                    <th>Email</th>
-                    <th>Status</th>
-                    <th>Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sends.map((row) => (
-                    <tr key={row.id}>
-                      <td>
-                        {row.name ? `${row.name} · ` : ''}
-                        {row.email}
-                      </td>
-                      <td>{row.status}</td>
-                      <td className="muted">{row.error || '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
           </>
         )}
 
-        <ConfirmModal
-          open={sendConfirm}
-          title="Send campaign?"
-          message={sendConfirmMessage}
-          confirmLabel={`Send ${sendableCount}`}
-          busy={sending}
-          onConfirm={handleSend}
-          onCancel={() => setSendConfirm(false)}
+        <MailingCampaignSendModal
+          open={Boolean(sendSession?.open)}
+          phase={sendSession?.phase || 'confirm'}
+          campaignName={form.name}
+          fromName={form.fromName}
+          fromEmail={form.fromEmail}
+          sendVia={sendVia}
+          batchSize={sendSession?.batchSize || batchSize}
+          remaining={sendSession?.remaining ?? remainingCount}
+          alreadySent={sendSession?.alreadySent ?? alreadySentCount}
+          targeted={sendSession?.targeted ?? sendableCount}
+          rows={sendSession?.rows || []}
+          error={sendSession?.error || ''}
+          onStart={() => handleSend(sendSession?.batchSize ?? batchSize)}
+          onSendMore={(size) => {
+            openSendBatch(size ?? batchSize)
+          }}
+          onClose={() => !sending && setSendSession(null)}
+        />
+        <MailingTestSendModal
+          open={Boolean(testReport)}
+          report={testReport}
+          onClose={() => !testing && setTestReport(null)}
         />
       </section>
     )
@@ -593,9 +991,9 @@ export default function MailingCampaignsSection() {
         <div>
           <h3 className="lookup-section-title">Campaigns</h3>
           <p className="lookup-section-intro muted">
-            Name a send, pick a template and an audience, then choose Outlook Graph or SendGrid on
-            the campaign. Graph drip-feeds from the connected mailbox; SendGrid uses your
-            authenticated domain.
+            Name a send, pick a template and an audience, set how many emails to send each day, then
+            click Send today&apos;s batch while this app is open. Already-sent contacts are skipped.
+            Each send is stored on the contact in the master client list.
           </p>
         </div>
         <button type="button" className="btn-primary" onClick={startNew}>
@@ -618,6 +1016,7 @@ export default function MailingCampaignsSection() {
                 <th>Audience</th>
                 <th>Send via</th>
                 <th>Status</th>
+                <th>Batch</th>
                 <th>Metrics</th>
                 <th></th>
               </tr>
@@ -635,6 +1034,7 @@ export default function MailingCampaignsSection() {
                   <td>{row.audienceName || '—'}</td>
                   <td>{sendViaLabel(row.sendVia)}</td>
                   <td>{row.status || 'draft'}</td>
+                  <td className="muted">{row.batchSize || 5} / day</td>
                   <td className="muted">{statsLine(row.stats)}</td>
                   <td className="systems-col-actions">
                     <button type="button" className="btn-secondary btn-small" onClick={() => startEdit(row)}>

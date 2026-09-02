@@ -1,4 +1,4 @@
-import { applyMergeTags, previewEmailHtml, SAMPLE_MERGE_CONTACT } from '../emailHtml.js'
+import { applyMergeTags, previewEmailHtml, SAMPLE_MERGE_CONTACT, normalizeEmailLayout } from '../emailHtml.js'
 
 export default function EmailPreviewFrame({
   html,
@@ -6,12 +6,14 @@ export default function EmailPreviewFrame({
   fromName = 'You',
   fromEmail = '',
   contact = SAMPLE_MERGE_CONTACT,
+  layout = 'outlook',
 }) {
-  const srcDoc = previewEmailHtml(html, contact)
+  const emailLayout = normalizeEmailLayout(layout)
+  const srcDoc = previewEmailHtml(html, contact, { layout: emailLayout })
   const mergedSubject = applyMergeTags(subject, contact) || '(no subject)'
 
   return (
-    <div className="email-preview">
+    <div className={`email-preview${emailLayout === 'outlook' ? ' email-preview--outlook' : ''}`}>
       <div className="email-preview-chrome">
         <div className="email-preview-chrome-row">
           <span className="email-preview-label">From</span>
@@ -33,7 +35,7 @@ export default function EmailPreviewFrame({
         </div>
       </div>
       <iframe
-        className="email-preview-frame"
+        className={`email-preview-frame${emailLayout === 'outlook' ? ' email-preview-frame--outlook' : ''}`}
         title="Inbox preview"
         sandbox="allow-same-origin"
         srcDoc={srcDoc}

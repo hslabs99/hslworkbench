@@ -3,20 +3,45 @@ import { parseEmailAddress } from '../emailAddress.js'
 import { uniqueMembers } from '../mailings.js'
 import EmailPreviewFrame from './EmailPreviewFrame.jsx'
 
+function membersInGivenOrder(rows) {
+  const seen = new Set()
+  const list = []
+  for (const row of rows || []) {
+    const email = parseEmailAddress(row.email)
+    if (!email || seen.has(email)) continue
+    seen.add(email)
+    list.push({
+      email,
+      name: String(row.name || '').trim(),
+      company: String(row.company || '').trim(),
+    })
+  }
+  return list
+}
+
 export default function MailingCampaignPreview({
   template,
   audience,
   fromName = '',
   fromEmail = '',
   excludedEmails,
+  members: membersOverride,
 }) {
   const [index, setIndex] = useState(0)
-  const members = useMemo(() => uniqueMembers(audience?.members), [audience])
+  const audienceMembers = useMemo(() => uniqueMembers(audience?.members), [audience])
+  const members = useMemo(() => {
+    if (Array.isArray(membersOverride) && membersOverride.length) {
+      return membersInGivenOrder(membersOverride)
+    }
+    return audienceMembers
+  }, [membersOverride, audienceMembers])
   const excluded = excludedEmails || new Set()
+  const scoped = Array.isArray(membersOverride) && membersOverride.length > 0
+  const memberKey = members.map((row) => row.email).join('\n')
 
   useEffect(() => {
     setIndex(0)
-  }, [audience?.id, template?.id])
+  }, [audience?.id, template?.id, memberKey])
 
   useEffect(() => {
     if (index >= members.length) setIndex(Math.max(0, members.length - 1))
@@ -33,7 +58,11 @@ export default function MailingCampaignPreview({
   if (!members.length) {
     return (
       <div className="systems-card mailing-wide-card">
-        <p className="muted">Choose an audience with members on the Campaign tab to step through each email.</p>
+        <p className="muted">
+          {scoped
+            ? 'No selected recipients to preview. Select contacts on the Recipients tab, then preview again.'
+            : 'Choose an audience with members on the Campaign tab to step through each email.'}
+        </p>
       </div>
     )
   }
@@ -57,6 +86,7 @@ export default function MailingCampaignPreview({
         <label className="campaign-preview-position">
           <span>
             {safeIndex + 1} of {members.length}
+            {scoped ? ' selected' : ''}
           </span>
           <select
             aria-label="Preview recipient"
@@ -76,6 +106,12 @@ export default function MailingCampaignPreview({
         </button>
       </div>
 
+      <p className="muted">
+        {scoped
+          ? `Previewing ${members.length} selected recipient${members.length === 1 ? '' : 's'} in table order.`
+          : `Previewing the full audience (${members.length}). Select a batch on Recipients to preview only those emails.`}
+      </p>
+
       {skipped ? (
         <p className="form-error">
           This address is on the exclusions list and will not be sent.
@@ -88,6 +124,7 @@ export default function MailingCampaignPreview({
         fromName={fromName}
         fromEmail={fromEmail}
         contact={contact}
+        layout={template.layout}
       />
     </div>
   )

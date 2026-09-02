@@ -2,10 +2,32 @@ import { parseEmailAddress } from './emailAddress.js'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
-export async function sendGraphMail(accessToken, { toEmail, toName, subject, html }) {
+export async function sendGraphMail(
+  accessToken,
+  {
+    toEmail,
+    toName,
+    subject,
+    html,
+    fromEmail,
+    fromName,
+    deliveryReceiptRequested = false,
+    readReceiptRequested = false,
+  },
+) {
   const address = parseEmailAddress(toEmail)
   if (!address) throw new Error('Recipient email is missing.')
   if (!subject) throw new Error('Email subject is missing.')
+
+  const fromAddress = parseEmailAddress(fromEmail)
+  const from = fromAddress
+    ? {
+        emailAddress: {
+          address: fromAddress,
+          name: fromName || fromAddress,
+        },
+      }
+    : null
 
   const res = await fetch(`${GRAPH}/me/sendMail`, {
     method: 'POST',
@@ -28,6 +50,9 @@ export async function sendGraphMail(accessToken, { toEmail, toName, subject, htm
             },
           },
         ],
+        ...(from ? { from, sender: from } : {}),
+        isDeliveryReceiptRequested: Boolean(deliveryReceiptRequested),
+        isReadReceiptRequested: Boolean(readReceiptRequested),
       },
       saveToSentItems: true,
     }),

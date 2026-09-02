@@ -10,12 +10,15 @@ import {
   MERGE_TAGS,
   SAMPLE_MERGE_CONTACT,
   emailCtaButtonHtml,
+  normalizeEmailLayout,
   normalizeUnsubscribeHrefs,
 } from '../emailHtml.js'
 import { mailingUnsubscribeHrefTemplate } from '../mailingOrigin.js'
+import EmailFileLinkModal from './EmailFileLinkModal.jsx'
 import EmailPreviewFrame from './EmailPreviewFrame.jsx'
 
 const FONTS = [
+  { label: 'Calibri', value: 'Calibri, Arial, sans-serif' },
   { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
   { label: 'Georgia', value: 'Georgia, serif' },
   { label: 'Times', value: '"Times New Roman", Times, serif' },
@@ -210,13 +213,18 @@ export default function EmailHtmlEditor({
   subject = '',
   fromName = '',
   fromEmail = '',
+  layout = 'outlook',
   placeholder = 'Write your email…',
 }) {
+  const emailLayout = normalizeEmailLayout(layout)
+  const outlookLayout = emailLayout === 'outlook'
   const initialHtml = normalizeUnsubscribeHrefs(html || DEFAULT_TEMPLATE_HTML)
   const [sourceMode, setSourceMode] = useState(false)
   const [source, setSource] = useState(initialHtml)
   const [liveHtml, setLiveHtml] = useState(initialHtml)
   const [samplePreview, setSamplePreview] = useState(true)
+  const [fileModalOpen, setFileModalOpen] = useState(false)
+  const [fileLinkDefaultLabel, setFileLinkDefaultLabel] = useState('')
 
   const editor = useEditor({
     immediatelyRender: false,
@@ -318,6 +326,33 @@ export default function EmailHtmlEditor({
       .focus()
       .insertContent(emailCtaButtonHtml({ label: label.trim() || 'Learn more', href: href.trim() || 'https://' }))
       .run()
+  }
+
+  function openFileModal() {
+    if (!editor) return
+    const { from, to } = editor.state.selection
+    setFileLinkDefaultLabel(editor.state.doc.textBetween(from, to, ' ').trim())
+    setFileModalOpen(true)
+  }
+
+  function insertFileLink({ href, label, asButton }) {
+    const safeHref = String(href || '').trim()
+    const safeLabel = String(label || '').trim() || 'Download'
+    if (!safeHref) return
+    const html = asButton && !outlookLayout
+      ? emailCtaButtonHtml({ label: safeLabel, href: safeHref })
+      : `<a href="${escapeHtml(safeHref)}">${escapeHtml(safeLabel)}</a>`
+    if (sourceMode) {
+      const next = `${source || ''}${html}`
+      setSource(next)
+      editor?.commands.setContent(next, { emitUpdate: false })
+      setLiveHtml(next)
+      onChange?.(next)
+      setFileModalOpen(false)
+      return
+    }
+    editor?.chain().focus().insertContent(html).run()
+    setFileModalOpen(false)
   }
 
   const previewHtml = liveHtml || html || ''
@@ -526,12 +561,19 @@ export default function EmailHtmlEditor({
         <ToolBtn title="Link" active={editor?.isActive('link')} onClick={insertLink}>
           Link
         </ToolBtn>
-        <ToolBtn title="Image from URL" onClick={insertImage}>
-          Image
+        <ToolBtn title="Upload a document to Firebase Storage and insert a named link" onClick={openFileModal}>
+          File
         </ToolBtn>
-        <ToolBtn title="Insert a table-based button (email-safe)" onClick={insertButton}>
-          Button
-        </ToolBtn>
+        {outlookLayout ? null : (
+          <>
+            <ToolBtn title="Image from URL" onClick={insertImage}>
+              Image
+            </ToolBtn>
+            <ToolBtn title="Insert a table-based button (email-safe)" onClick={insertButton}>
+              Button
+            </ToolBtn>
+          </>
+        )}
         <select
           className="email-editor-select"
           aria-label="Insert merge tag"
@@ -579,7 +621,7 @@ export default function EmailHtmlEditor({
       </div>
 
       <div className="email-editor-split">
-        <div className="email-editor-pane">
+        <div className={`email-editor-pane${outlookLayout ? ' email-editor-pane--outlook' : ''}`}>
           <div className="email-editor-pane-label">Editor</div>
           {sourceMode ? (
             <textarea
@@ -595,7 +637,9 @@ export default function EmailHtmlEditor({
         </div>
         <div className="email-editor-pane">
           <div className="email-editor-pane-head">
-            <div className="email-editor-pane-label">Inbox preview (600px, inlined)</div>
+            <div className="email-editor-pane-label">
+              {outlookLayout ? 'Inbox preview (Outlook message)' : 'Inbox preview (600px card)'}
+            </div>
             <label className="email-editor-preview-toggle">
               <input
                 type="checkbox"
@@ -611,9 +655,16 @@ export default function EmailHtmlEditor({
             fromName={fromName}
             fromEmail={fromEmail}
             contact={previewContact}
+            layout={emailLayout}
           />
         </div>
       </div>
+      <EmailFileLinkModal
+        open={fileModalOpen}
+        defaultLabel={fileLinkDefaultLabel}
+        onCancel={() => setFileModalOpen(false)}
+        onInserted={insertFileLink}
+      />
     </div>
   )
 }

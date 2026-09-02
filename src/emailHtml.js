@@ -22,11 +22,19 @@ export const SAMPLE_MERGE_CONTACT = {
   company: 'Acme Ltd',
 }
 
-export const DEFAULT_TEMPLATE_HTML = `<h1>Hello {{name}},</h1>
-<p>A short update from our team. Replace this copy with your campaign message — headings, fonts, colours, links, images, and buttons all come through in the inbox preview on the right.</p>
-<p>Kind regards,<br>The team</p>`
+export const DEFAULT_TEMPLATE_HTML = `<p>Hi {{name}},</p>
+<p>A short note from me. Replace this copy with a genuine introduction — ordinary paragraphs and links, the way you would write in Outlook.</p>
+<p>Kind regards</p>`
 
-const TAG_DEFAULT_STYLES = {
+export function normalizeEmailLayout(value) {
+  return value === 'card' ? 'card' : 'outlook'
+}
+
+export function emailLayoutLabel(value) {
+  return normalizeEmailLayout(value) === 'card' ? 'Marketing card' : 'Outlook message'
+}
+
+const CARD_TAG_DEFAULT_STYLES = {
   P: 'margin:0 0 16px 0;font-size:16px;line-height:1.55;color:#222222;font-family:Arial,Helvetica,sans-serif;',
   H1: 'margin:0 0 16px 0;font-size:26px;line-height:1.25;color:#111111;font-family:Arial,Helvetica,sans-serif;font-weight:bold;',
   H2: 'margin:0 0 14px 0;font-size:22px;line-height:1.3;color:#111111;font-family:Arial,Helvetica,sans-serif;font-weight:bold;',
@@ -39,6 +47,21 @@ const TAG_DEFAULT_STYLES = {
   BLOCKQUOTE:
     'margin:0 0 16px 0;padding:8px 0 8px 16px;border-left:4px solid #d0d4dc;color:#444444;font-family:Arial,Helvetica,sans-serif;',
   HR: 'border:0;border-top:1px solid #d0d4dc;margin:24px 0;',
+}
+
+const OUTLOOK_FONT = 'Calibri,Arial,sans-serif'
+const OUTLOOK_TAG_DEFAULT_STYLES = {
+  P: `margin:0 0 12px 0;font-size:12pt;line-height:1.35;color:#000000;font-family:${OUTLOOK_FONT};`,
+  H1: `margin:0 0 12px 0;font-size:14pt;line-height:1.3;color:#000000;font-family:${OUTLOOK_FONT};font-weight:bold;`,
+  H2: `margin:0 0 12px 0;font-size:13pt;line-height:1.3;color:#000000;font-family:${OUTLOOK_FONT};font-weight:bold;`,
+  H3: `margin:0 0 12px 0;font-size:12pt;line-height:1.35;color:#000000;font-family:${OUTLOOK_FONT};font-weight:bold;`,
+  UL: `margin:0 0 12px 0;padding:0 0 0 24px;font-size:12pt;line-height:1.35;color:#000000;font-family:${OUTLOOK_FONT};`,
+  OL: `margin:0 0 12px 0;padding:0 0 0 24px;font-size:12pt;line-height:1.35;color:#000000;font-family:${OUTLOOK_FONT};`,
+  LI: 'margin:0 0 4px 0;',
+  A: 'color:#0563C1;text-decoration:underline;',
+  IMG: 'max-width:100%;height:auto;border:0;',
+  BLOCKQUOTE: `margin:0 0 12px 0;padding:0 0 0 12px;border-left:2px solid #cccccc;color:#000000;font-family:${OUTLOOK_FONT};`,
+  HR: 'border:0;border-top:1px solid #cccccc;margin:16px 0;',
 }
 
 export function applyMergeTags(text, contact = {}) {
@@ -92,10 +115,17 @@ export function htmlToPlainText(html) {
   return (doc.body?.textContent || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
-function convertCtasToTables(root, doc) {
+function convertCtas(root, doc, layout) {
   root.querySelectorAll('a.email-cta').forEach((el) => {
     const href = el.getAttribute('href') || 'https://'
     const label = el.textContent || 'Learn more'
+    if (layout === 'outlook') {
+      const link = doc.createElement('a')
+      link.setAttribute('href', href)
+      link.textContent = label
+      el.replaceWith(link)
+      return
+    }
     const color = el.getAttribute('data-color') || '#0c66e4'
     const wrapper = doc.createElement('div')
     wrapper.innerHTML = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:16px auto;">
@@ -115,22 +145,34 @@ function convertCtasToTables(root, doc) {
   })
 }
 
+function preferOutlookFont(style) {
+  const current = String(style || '')
+  if (/font-family\s*:/i.test(current) && !/arial|helvetica/i.test(current)) return current
+  const stripped = current.replace(/font-family\s*:[^;]+;?/gi, '').trim()
+  return `font-family:${OUTLOOK_FONT};${stripped}`
+}
+
 function prependStyle(el, extra) {
   if (!el || !extra) return
   const current = el.getAttribute('style') || ''
   el.setAttribute('style', current ? `${extra}${current}` : extra)
 }
 
-function inlineEmailFragment(html) {
+function inlineEmailFragment(html, layout) {
+  const emailLayout = normalizeEmailLayout(layout)
+  const tagStyles = emailLayout === 'card' ? CARD_TAG_DEFAULT_STYLES : OUTLOOK_TAG_DEFAULT_STYLES
   const doc = new DOMParser().parseFromString(`<div id="email-root">${html || ''}</div>`, 'text/html')
   const root = doc.getElementById('email-root')
   if (!root) return html || ''
 
-  convertCtasToTables(root, doc)
+  convertCtas(root, doc, emailLayout)
 
   root.querySelectorAll('*').forEach((el) => {
-    const defaults = TAG_DEFAULT_STYLES[el.tagName]
+    const defaults = tagStyles[el.tagName]
     if (defaults) prependStyle(el, defaults)
+    if (emailLayout === 'outlook' && /^(P|H1|H2|H3|UL|OL|LI|TD|DIV)$/.test(el.tagName)) {
+      el.setAttribute('style', preferOutlookFont(el.getAttribute('style') || ''))
+    }
     if (el.tagName === 'IMG') {
       el.setAttribute('border', '0')
       if (!el.getAttribute('alt')) el.setAttribute('alt', '')
@@ -175,16 +217,7 @@ function rewriteTrackedLinks(html, sendId) {
   return root.innerHTML
 }
 
-export function wrapEmailHtml(innerHtml, { pixelUrl = '', unsubscribeUrl = '' } = {}) {
-  const fragment = inlineEmailFragment(innerHtml)
-  const pixel = pixelUrl
-    ? `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;" />`
-    : ''
-  const footer =
-    unsubscribeUrl && !htmlHasUnsubscribe(fragment)
-      ? `<p style="margin:24px 0 0 0;font-size:12px;line-height:1.4;color:#6b7280;font-family:Arial,Helvetica,sans-serif;"><a href="${unsubscribeUrl}" class="email-unsubscribe" style="color:#6b7280;text-decoration:underline;">unsubscribe</a></p>`
-      : ''
-
+function wrapCardHtml(fragment, footer, pixel) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -213,19 +246,62 @@ export function wrapEmailHtml(innerHtml, { pixelUrl = '', unsubscribeUrl = '' } 
 </html>`
 }
 
-export function buildCampaignEmail({ htmlBody, contact, sendId, origin, unsubscribeUrl: unsubscribeUrlRaw } = {}) {
+function wrapOutlookHtml(fragment, footer) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title></title>
+</head>
+<body style="margin:0;padding:8px 0 0 0;background-color:#ffffff;width:100%;font-family:${OUTLOOK_FONT};font-size:12pt;line-height:1.35;color:#000000;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;">
+  <div style="font-family:${OUTLOOK_FONT};font-size:12pt;line-height:1.35;color:#000000;">
+    ${fragment}
+    ${footer}
+  </div>
+</body>
+</html>`
+}
+
+export function wrapEmailHtml(innerHtml, { pixelUrl = '', unsubscribeUrl = '', layout } = {}) {
+  const emailLayout = normalizeEmailLayout(layout)
+  const fragment = inlineEmailFragment(innerHtml, emailLayout)
+  const pixel = pixelUrl
+    ? `<img src="${pixelUrl}" width="1" height="1" alt="" style="display:block;border:0;width:1px;height:1px;" />`
+    : ''
+  const footer =
+    unsubscribeUrl && !htmlHasUnsubscribe(fragment)
+      ? emailLayout === 'outlook'
+        ? `<p style="margin:16px 0 0 0;font-size:11pt;line-height:1.35;color:#000000;font-family:${OUTLOOK_FONT};"><a href="${unsubscribeUrl}" class="email-unsubscribe" style="color:#0563C1;text-decoration:underline;">unsubscribe</a></p>`
+        : `<p style="margin:24px 0 0 0;font-size:12px;line-height:1.4;color:#6b7280;font-family:Arial,Helvetica,sans-serif;"><a href="${unsubscribeUrl}" class="email-unsubscribe" style="color:#6b7280;text-decoration:underline;">unsubscribe</a></p>`
+      : ''
+
+  if (emailLayout === 'outlook') return wrapOutlookHtml(fragment, footer)
+  return wrapCardHtml(fragment, footer, pixel)
+}
+
+export function buildCampaignEmail({
+  htmlBody,
+  contact,
+  sendId,
+  origin,
+  unsubscribeUrl: unsubscribeUrlRaw,
+  layout,
+} = {}) {
+  const emailLayout = normalizeEmailLayout(layout)
   const unsubUrl =
     unsubscribeUrlRaw || mailingUnsubscribeUrl({ sendId, email: contact?.email || '' })
   const merged = applyUnsubscribeUrl(applyMergeTags(htmlBody, contact), unsubUrl)
-  const pixelUrl = sendId ? mailingOpenPixelUrl(sendId) : ''
-  const tracked = rewriteTrackedLinks(merged, sendId)
-  return wrapEmailHtml(tracked, { pixelUrl, unsubscribeUrl: unsubUrl })
+  const pixelUrl = emailLayout === 'card' && sendId ? mailingOpenPixelUrl(sendId) : ''
+  const tracked = emailLayout === 'card' ? rewriteTrackedLinks(merged, sendId) : merged
+  return wrapEmailHtml(tracked, { pixelUrl, unsubscribeUrl: unsubUrl, layout: emailLayout })
 }
 
-export function previewEmailHtml(htmlBody, contact = SAMPLE_MERGE_CONTACT) {
+export function previewEmailHtml(htmlBody, contact = SAMPLE_MERGE_CONTACT, { layout } = {}) {
   const previewUnsub = mailingUnsubscribeUrl({ email: contact.email || '' })
   const merged = applyUnsubscribeUrl(applyMergeTags(htmlBody, contact), previewUnsub)
-  return wrapEmailHtml(merged, { unsubscribeUrl: previewUnsub })
+  return wrapEmailHtml(merged, { unsubscribeUrl: previewUnsub, layout })
 }
 
 export function emailCtaButtonHtml({ href = 'https://', label = 'Learn more', color = '#0c66e4' } = {}) {

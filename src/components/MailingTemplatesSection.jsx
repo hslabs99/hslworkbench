@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
-import { DEFAULT_TEMPLATE_HTML } from '../emailHtml.js'
+import { parseEmailAddress } from '../emailAddress.js'
+import { DEFAULT_TEMPLATE_HTML, emailLayoutLabel, normalizeEmailLayout } from '../emailHtml.js'
 import { fetchMailingConfig, sendTestEmail } from '../mailingSend.js'
+import { graphSendScopes } from '../msalConfig.js'
+import { useMicrosoftAuth } from '../MicrosoftAuthContext.jsx'
 import { sendGridClientHint } from '../runtimeMode.js'
 import {
   createMailingTemplate,
@@ -11,16 +14,20 @@ import {
 } from '../mailings.js'
 import ConfirmModal from './ConfirmModal.jsx'
 import EmailHtmlEditor from './EmailHtmlEditor.jsx'
+import MailingTestSendMenu, { testRecipientFromInput } from './MailingTestSendMenu.jsx'
 import MailingTestSendModal from './MailingTestSendModal.jsx'
+import MicrosoftConnectCard from './MicrosoftConnectCard.jsx'
 
 const EMPTY = {
   name: '',
   description: '',
   subject: '',
   htmlBody: DEFAULT_TEMPLATE_HTML,
+  layout: 'outlook',
 }
 
 export default function MailingTemplatesSection() {
+  const { account, getAccessToken, userEmail, userName } = useMicrosoftAuth()
   const [templates, setTemplates] = useState([])
   const [mailConfig, setMailConfig] = useState({
     configured: false,
@@ -33,10 +40,18 @@ export default function MailingTemplatesSection() {
   const [error, setError] = useState(null)
   const [editing, setEditing] = useState(null)
   const [form, setForm] = useState(EMPTY)
+  const [sendVia, setSendVia] = useState('graph')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testReport, setTestReport] = useState(null)
   const [deleteTarget, setDeleteTarget] = useState(null)
+
+  const graphReady = Boolean(account && userEmail)
+  const sendgridReady = Boolean(mailConfig.configured)
+  const testReady = sendVia === 'graph' ? graphReady : sendgridReady
+  const testFromEmail = sendVia === 'graph' ? userEmail : mailConfig.fromEmail
+  const testFromName = sendVia === 'graph' ? userName || userEmail : mailConfig.fromName
+  const layout = normalizeEmailLayout(form.layout)
 
   useEffect(() => {
     fetchMailingConfig()
@@ -78,6 +93,7 @@ export default function MailingTemplatesSection() {
         description: full.description || '',
         subject: full.subject || '',
         htmlBody: full.htmlBody || DEFAULT_TEMPLATE_HTML,
+        layout: normalizeEmailLayout(full.layout),
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -94,6 +110,7 @@ export default function MailingTemplatesSection() {
         description: form.description.trim(),
         subject: form.subject.trim(),
         htmlBody: form.htmlBody,
+        layout: normalizeEmailLayout(form.layout),
       }
       if (editing === 'new') {
         const id = await createMailingTemplate(payload)
@@ -108,32 +125,44 @@ export default function MailingTemplatesSection() {
     }
   }
 
-  async function handleTestSend() {
+  async function handleTestSend(recipientRaw) {
     setTesting(true)
     setError(null)
+    const layout = normalizeEmailLayout(form.layout)
+    const meEmail = parseEmailAddress(userEmail || mailConfig.testRecipient || '')
+    const { email: toEmail, name: toName } = testRecipientFromInput(recipientRaw, {
+      meEmail,
+      meName: testFromName || userName || meEmail,
+    })
     setTestReport({
       status: 'running',
+      provider: sendVia,
       steps: [],
-      from: mailConfig.fromEmail,
-      fromName: mailConfig.fromName,
-      to: mailConfig.testRecipient || mailConfig.fromEmail,
+      from: testFromEmail,
+      fromName: testFromName,
+      to: toEmail,
+      toName,
       subject: form.subject ? `[TEST] ${form.subject.trim()}` : '',
     })
     try {
-      if (!mailConfig.configured) {
-        throw new Error(
-          sendGridClientHint(mailConfig) ||
-            'SendGrid is not configured.',
-        )
+      if (sendVia === 'graph' && !graphReady) {
+        throw new Error('Connect your Microsoft account to send a test via Outlook Graph.')
       }
+      if (sendVia === 'sendgrid' && !mailConfig.configured) {
+        throw new Error(sendGridClientHint(mailConfig) || 'SendGrid is not configured.')
+      }
+      if (!toEmail) throw new Error('Enter an email address to send the test to.')
       await sendTestEmail({
-        toEmail: mailConfig.testRecipient || mailConfig.fromEmail,
-        toName: mailConfig.fromName || mailConfig.testRecipient || mailConfig.fromEmail,
+        sendVia,
+        toEmail,
+        toName: toName || toEmail,
         subject: `[TEST] ${form.subject.trim()}`,
         htmlBody: form.htmlBody,
         origin: window.location.origin,
-        fromEmail: mailConfig.fromEmail,
-        fromName: mailConfig.fromName,
+        fromEmail: testFromEmail,
+        fromName: testFromName,
+        layout,
+        getAccessToken,
         onReport: setTestReport,
       })
     } catch (err) {
@@ -174,22 +203,93 @@ export default function MailingTemplatesSection() {
             <button type="button" className="btn-secondary" onClick={() => setEditing(null)}>
               Back to list
             </button>
-            <button type="button" className="btn-secondary" onClick={handleTestSend} disabled={testing || !mailConfig.configured}>
-              {testing ? 'Sending test…' : 'Send test to me'}
-            </button>
+            <MailingTestSendMenu
+              disabled={testing || !testReady}
+              busy={testing}
+              meEmail={parseEmailAddress(userEmail || mailConfig.testRecipient || '')}
+              onSend={handleTestSend}
+            />
             <button type="button" className="btn-primary" onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : 'Save template'}
             </button>
           </div>
         </div>
 
-        {!mailConfig.configured && (
-          <p className="form-error">
-            {sendGridClientHint(mailConfig)}
-          </p>
+        <MicrosoftConnectCard
+          scopes={graphSendScopes}
+          hint="Connect Outlook to send a test from this mailbox. SendGrid remains available as the other test method."
+        />
+
+        {sendVia === 'graph' && !graphReady && (
+          <p className="form-error">Connect your Microsoft account to send a test via Outlook Graph.</p>
+        )}
+        {sendVia === 'sendgrid' && !mailConfig.configured && (
+          <p className="form-error">{sendGridClientHint(mailConfig)}</p>
         )}
 
         <div className="systems-card mailing-wide-card mailing-form">
+          <div className="mailing-send-via full-width">
+            <span>Send test via</span>
+            <div className="mailing-send-via-options" role="radiogroup" aria-label="Send test via">
+              <label className={`mailing-send-via-option${sendVia === 'graph' ? ' is-selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="templateSendVia"
+                  value="graph"
+                  checked={sendVia === 'graph'}
+                  onChange={() => setSendVia('graph')}
+                />
+                <span>
+                  Outlook Graph
+                  <small>Send the test from the connected mailbox, same as a campaign Graph send.</small>
+                </span>
+              </label>
+              <label className={`mailing-send-via-option${sendVia === 'sendgrid' ? ' is-selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="templateSendVia"
+                  value="sendgrid"
+                  checked={sendVia === 'sendgrid'}
+                  onChange={() => setSendVia('sendgrid')}
+                />
+                <span>
+                  SendGrid
+                  <small>API send from the authenticated domain, same as a campaign SendGrid send.</small>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div className="mailing-send-via full-width">
+            <span>Email format</span>
+            <div className="mailing-send-via-options" role="radiogroup" aria-label="Email format">
+              <label className={`mailing-send-via-option${layout === 'outlook' ? ' is-selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="templateLayout"
+                  value="outlook"
+                  checked={layout === 'outlook'}
+                  onChange={() => setForm((f) => ({ ...f, layout: 'outlook' }))}
+                />
+                <span>
+                  Outlook message
+                  <small>White page, Calibri, ordinary links — looks like a personal email from Outlook.</small>
+                </span>
+              </label>
+              <label className={`mailing-send-via-option${layout === 'card' ? ' is-selected' : ''}`}>
+                <input
+                  type="radio"
+                  name="templateLayout"
+                  value="card"
+                  checked={layout === 'card'}
+                  onChange={() => setForm((f) => ({ ...f, layout: 'card' }))}
+                />
+                <span>
+                  Marketing card
+                  <small>600px white panel on grey, campaign-style layout with tracking.</small>
+                </span>
+              </label>
+            </div>
+          </div>
           <div className="mailing-template-meta">
             <label>
               Template name
@@ -218,18 +318,20 @@ export default function MailingTemplatesSection() {
           <p className="muted mailing-merge-hint">
             Merge tags: {'{{name}}'}, {'{{email}}'}, {'{{company}}'}, {'{{contact}}'}, and
             {' {{unsubscribe}}'} (inserts a link labelled unsubscribe to the hosted
-            /unsubscribe page, with the recipient email in the URL). Host images at public https
-            URLs. Enter starts a new paragraph (extra space). Shift+Enter is a line break. Select
-            several short lines and click Tight to stack them with no gap. If the template has no
-            unsubscribe link, one is added at the bottom of campaign emails. The preview on the
-            right is wrapped the same way Outlook will receive it (600px card, inline styles).
+            /unsubscribe page, with the recipient email in the URL). Use File to upload a
+            document and insert a named link. Enter starts a new paragraph (extra space).
+            Shift+Enter is a line break. Select several short lines and click Tight to stack
+            them with no gap. If the template has no unsubscribe link, one is added at the
+            bottom of campaign emails. The preview matches the format above
+            ({layout === 'outlook' ? 'plain Outlook message' : '600px marketing card'}).
           </p>
           <EmailHtmlEditor
             contentKey={editing}
             html={form.htmlBody}
             subject={form.subject}
-            fromName={mailConfig.fromName}
-            fromEmail={mailConfig.fromEmail}
+            fromName={testFromName || mailConfig.fromName}
+            fromEmail={testFromEmail || mailConfig.fromEmail}
+            layout={layout}
             onChange={(htmlBody) => setForm((f) => ({ ...f, htmlBody }))}
           />
           {error && <p className="form-error">{error}</p>}
@@ -249,9 +351,9 @@ export default function MailingTemplatesSection() {
         <div>
           <h3 className="lookup-section-title">Email templates</h3>
           <p className="lookup-section-intro muted">
-            Subject, body, and merge tags live on the template. No Exchange mailbox connection is
-            required here. Use Send test (SendGrid) to preview in your inbox. Campaigns pick which
-            template and audience to send.
+            Subject, body, format, and merge tags live on the template. Use Send test via Outlook
+            Graph or SendGrid — the same methods campaigns use. Campaigns pick which template and
+            audience to send.
           </p>
         </div>
         <button type="button" className="btn-primary" onClick={startNew}>
@@ -263,13 +365,14 @@ export default function MailingTemplatesSection() {
         {loading ? (
           <p className="muted">Loading templates…</p>
         ) : templates.length === 0 ? (
-          <p className="muted">No templates yet. Create one and use Send test to me before a campaign.</p>
+          <p className="muted">No templates yet. Create one and use Send test before a campaign.</p>
         ) : (
           <table className="systems-table">
             <thead>
               <tr>
                 <th>Name</th>
                 <th>Subject</th>
+                <th>Format</th>
                 <th></th>
               </tr>
             </thead>
@@ -283,6 +386,7 @@ export default function MailingTemplatesSection() {
                     {row.description ? <div className="muted">{row.description}</div> : null}
                   </td>
                   <td>{row.subject || '—'}</td>
+                  <td>{emailLayoutLabel(row.layout)}</td>
                   <td className="systems-col-actions">
                     <button type="button" className="btn-secondary btn-small" onClick={() => startEdit(row)}>
                       Edit
