@@ -1,0 +1,17 @@
+{
+  "name": "hsl-workbench",
+  "install": "npm ci && node .cursor/gen-dev-env.mjs",
+  "terminals": [
+    {
+      "name": "dev",
+      "command": "bash .cursor/dev.sh",
+      "description": "Vite dev server + in-process API (Firestore / OpenAI / SendGrid / Microsoft proxy) on http://localhost:5173. Login is pre-filled with the seeded dev user."
+    }
+  ],
+  "ports": [
+    {
+      "name": "vite-dev",
+      "port": 5173
+    }
+  ]
+}
